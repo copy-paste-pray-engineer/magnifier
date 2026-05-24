@@ -336,14 +336,30 @@ class WGCSession:
         finally:
             _com_release(dxgi_ptr)
 
-        # 3) FramePool — BGRA8, 2 프레임 버퍼
+        # 3) FramePool — BGRA8, 2 프레임 버퍼.
+        #
+        # create() 는 호출 스레드에 Windows.System.DispatcherQueue 가 있어야
+        # 한다. 우리는 Qt 의 QThread(CaptureThread) 위에서 세션을 만들기 때문에
+        # DispatcherQueue 가 없어 RPC_E_WRONG_THREAD 가 날 수 있다.
+        # create_free_threaded() 는 MTA 콜백을 사용해 이 제약을 제거하며,
+        # frame_arrived 콜백은 임의의 워커 스레드에서 발동되지만
+        # self._lock 으로 이미 직렬화되어 있어 안전하다.
         size = item.size
-        self._pool = Direct3D11CaptureFramePool.create(
-            self._d3d_wrapped,
-            dx.DirectXPixelFormat.B8_G8_R8_A8_UINT_NORMALIZED,
-            2,
-            size,
-        )
+        if hasattr(Direct3D11CaptureFramePool, "create_free_threaded"):
+            self._pool = Direct3D11CaptureFramePool.create_free_threaded(
+                self._d3d_wrapped,
+                dx.DirectXPixelFormat.B8_G8_R8_A8_UINT_NORMALIZED,
+                2,
+                size,
+            )
+        else:
+            # 구버전 winrt-runtime 폴백
+            self._pool = Direct3D11CaptureFramePool.create(
+                self._d3d_wrapped,
+                dx.DirectXPixelFormat.B8_G8_R8_A8_UINT_NORMALIZED,
+                2,
+                size,
+            )
         self._session_obj = self._pool.create_capture_session(item)
 
         # 4) 프레임 도착 콜백

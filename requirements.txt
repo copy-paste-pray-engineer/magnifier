@@ -5,10 +5,11 @@ numpy>=1.26.0
 Pillow>=10.0.0
 
 # 선택: 고성능 WGC (고성능 모드에서 사용)
-# winrt-runtime
-# winrt-Windows.Graphics.Capture
-# winrt-Windows.Graphics.DirectX
-# winrt-Windows.Graphics.DirectX.Direct3D11
+winrt-runtime
+winrt-Windows.Graphics.Capture
+winrt-Windows.Graphics.DirectX
+winrt-Windows.Graphics.DirectX.Direct3D11
+winrt-Windows.Graphics.Imaging       # SoftwareBitmap 폴백 경로 (vtable 언랩 실패 시)
 
 # 빌드용
 pyinstaller>=6.0.0
