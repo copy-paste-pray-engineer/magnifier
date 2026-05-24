@@ -129,6 +129,7 @@ class MagnifierWindow(QWidget):
         self.selection_overlay: Optional[SelectionOverlay] = None
 
         self._frame         : Optional[QImage] = None
+        self._frame_buf     : Optional[bytes]  = None  # QImage 가 참조하는 픽셀 버퍼 유지
         self._click_through = config.click_through
         self._show_hud      = config.show_hud
         self._dwm_mode      = False
@@ -146,6 +147,10 @@ class MagnifierWindow(QWidget):
 
         self._setup_window()
         self._apply_config()
+
+        # 캡처 엔진에 대상 hwnd 사용 등록(참조 카운트). closeEvent 에서 release.
+        if config.target_hwnd:
+            self.capture_engine.acquire_wgc(config.target_hwnd)
 
         self._cap = CaptureThread(capture_engine, config)
         self._cap.frame_ready.connect(self._on_frame)
@@ -209,9 +214,12 @@ class MagnifierWindow(QWidget):
         if frame is None or frame.size == 0:
             return
         h, w, c = frame.shape
+        # tobytes() 가 이미 새 복사본을 만들어 두므로 QImage.copy() 는 불필요.
+        # 다만 QImage 는 데이터 소유권을 갖지 않으니 self 에서 참조를 유지해야 한다.
+        self._frame_buf = frame.tobytes()
         self._frame = QImage(
-            frame.tobytes(), w, h, c * w, QImage.Format.Format_RGB888
-        ).copy()
+            self._frame_buf, w, h, c * w, QImage.Format.Format_RGB888
+        )
         self.update()
         self._fps_count += 1
 
@@ -498,6 +506,13 @@ class MagnifierWindow(QWidget):
     def _capture_cursor_window(self):
         hwnd  = self.capture_engine.get_window_at_cursor()
         title = self.capture_engine.get_window_title(hwnd)
+        # 이전 hwnd 의 참조 해제 → 새 hwnd 등록
+        old_hwnd = self.config.target_hwnd
+        if old_hwnd != hwnd:
+            if old_hwnd:
+                self.capture_engine.release_wgc(old_hwnd)
+            if hwnd:
+                self.capture_engine.acquire_wgc(hwnd)
         self.config.target_hwnd = hwnd
         if self._dwm_mode:
             self._stop_dwm()
@@ -522,5 +537,11 @@ class MagnifierWindow(QWidget):
             self._panel.close()
         if self.selection_overlay:
             self.selection_overlay.close()
+        # 캡처 엔진의 hwnd 참조 해제 — 0 이 되면 WGC 세션이 즉시 종료된다.
+        if self.config.target_hwnd:
+            try:
+                self.capture_engine.release_wgc(self.config.target_hwnd)
+            except Exception:
+                pass
         self._save_config()
         super().closeEvent(e)

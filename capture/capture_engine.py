@@ -138,6 +138,7 @@ class CaptureEngine:
         self.method = method
         self._gdi   = _GDI()
         self._wgc_sessions: Dict[int, object] = {}
+        self._wgc_refcount: Dict[int, int]    = {}
 
         if method == "auto":
             self._active = "wgc" if _check_wgc() else "bitblt"
@@ -145,6 +146,24 @@ class CaptureEngine:
             self._active = method if method in ("wgc", "bitblt") else "bitblt"
 
         print(f"캡처 방법: {self._active.upper()}")
+
+    # ── WGC 세션 라이프사이클 ────────────────────────────────────
+    def acquire_wgc(self, hwnd: int):
+        """확대기가 hwnd 를 사용하기 시작할 때 호출 — 참조 카운트 +1."""
+        if not hwnd:
+            return
+        self._wgc_refcount[hwnd] = self._wgc_refcount.get(hwnd, 0) + 1
+
+    def release_wgc(self, hwnd: int):
+        """확대기가 hwnd 사용을 끝낼 때 호출 — 0 되면 세션 종료."""
+        if not hwnd:
+            return
+        cnt = self._wgc_refcount.get(hwnd, 0) - 1
+        if cnt <= 0:
+            self._wgc_refcount.pop(hwnd, None)
+            self.release_wgc_session(hwnd)
+        else:
+            self._wgc_refcount[hwnd] = cnt
 
     # ── 공개 API ────────────────────────────────────────────────
 
@@ -225,3 +244,4 @@ class CaptureEngine:
             try: sess.close()
             except Exception: pass
         self._wgc_sessions.clear()
+        self._wgc_refcount.clear()

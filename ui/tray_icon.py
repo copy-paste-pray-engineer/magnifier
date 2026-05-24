@@ -130,4 +130,9 @@ class SystemTrayIcon(QSystemTrayIcon):
     def _quit(self):
         self.settings.save_magnifier_configs(self.mgr.get_configs())
         self.mgr.destroy_all()
+        # 캡처 엔진의 모든 WGC 세션(D3D11 디바이스 포함) 해제
+        try:
+            self.mgr.capture_engine.close()
+        except Exception:
+            pass
         QApplication.quit()
