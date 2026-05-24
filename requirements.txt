@@ -1,0 +1,14 @@
+# WinMagnifier 필수 패키지
+PySide6>=6.6.0
+pywin32>=306
+numpy>=1.26.0
+Pillow>=10.0.0
+
+# 선택: 고성능 WGC (고성능 모드에서 사용)
+# winrt-runtime
+# winrt-Windows.Graphics.Capture
+# winrt-Windows.Graphics.DirectX
+# winrt-Windows.Graphics.DirectX.Direct3D11
+
+# 빌드용
+pyinstaller>=6.0.0
