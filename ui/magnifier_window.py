@@ -4,10 +4,11 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 import ctypes
+import ctypes.wintypes
 import time
 
 import numpy as np
-from PySide6.QtWidgets import QWidget, QMenu, QAction
+from PySide6.QtWidgets import QWidget, QMenu, QHBoxLayout, QLabel, QPushButton
 from PySide6.QtCore import (
     Qt, QRect, QPoint, QSize, QTimer, QThread, QMutex, QMutexLocker, Signal
 )
@@ -15,6 +16,46 @@ from PySide6.QtGui import (
     QPainter, QColor, QImage,
     QMouseEvent, QFont, QCursor, QResizeEvent,
 )
+
+# ── 창 선택 안내 배너 ─────────────────────────────────────────────
+class _PickerBanner(QWidget):
+    """
+    창 선택 모드 진입 시 화면 상단 중앙에 표시되는 작은 안내 위젯.
+    WA_ShowWithoutActivating 으로 포커스를 빼앗지 않으므로
+    사용자가 다른 창을 그대로 클릭할 수 있다.
+    """
+    from PySide6.QtCore import Signal as _Signal
+    cancel_requested = _Signal()
+
+    def __init__(self):
+        super().__init__(None,
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setStyleSheet(
+            "QWidget { background: #1e1e1e; border: 1px solid #555; border-radius: 6px; }"
+            "QLabel  { color: #e0e0e0; font-family: Consolas; font-size: 12px;"
+            "          border: none; background: transparent; padding: 0; }"
+            "QPushButton { background: #6b1c1c; border: 1px solid #aa3030;"
+            "              border-radius: 4px; padding: 4px 14px;"
+            "              color: #ffaaaa; font-family: Consolas; font-size: 11px; }"
+            "QPushButton:hover { background: #992222; }"
+        )
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(14)
+        lbl = QLabel("클릭할 창을 선택하세요  ·  ESC 또는 취소 버튼으로 중단")
+        btn = QPushButton("취소")
+        btn.setFixedWidth(60)
+        btn.clicked.connect(self.cancel_requested)
+        lay.addWidget(lbl)
+        lay.addWidget(btn)
+        self.adjustSize()
+
+        from PySide6.QtWidgets import QApplication
+        sr = QApplication.primaryScreen().geometry()
+        self.move(sr.center().x() - self.width() // 2, sr.top() + 12)
 
 from capture.capture_engine import CaptureEngine
 from utils.settings         import MagnifierConfig
@@ -33,11 +74,11 @@ R_NONE = 0
 R_N=1; R_S=2; R_W=3; R_E=4; R_NW=5; R_NE=6; R_SW=7; R_SE=8
 
 HANDLE = 14     # 리사이즈 감지 너비
-MIN_W  = 80
-MIN_H  = 60
+MIN_W  = 20   # Feature 5: 줌아웃 허용을 위해 최솟값 축소
+MIN_H  = 15
 
 # HUD 캡처 방법 약어
-_METHOD_SHORT = {"auto": "AUTO", "wgc": "WGC", "bitblt": "GDI"}
+_METHOD_SHORT = {"auto": "AUTO", "wgc": "WGC", "bitblt": "GDI", "printwindow": "PW"}
 
 # 우클릭 메뉴 스타일 — 항목 가운데 정렬
 _CTX_STYLE = """
@@ -120,6 +161,9 @@ class CaptureThread(QThread):
 # ── 출력창 ────────────────────────────────────────────────────
 class MagnifierWindow(QWidget):
 
+    closed                 = Signal()   # 창이 닫힐 때 MagnifierManager 에 알림
+    save_preset_requested  = Signal(str)  # 프리셋 이름 → Manager 가 저장 처리
+
     def __init__(self, mag_id: int, config: MagnifierConfig,
                  capture_engine: CaptureEngine, parent=None):
         super().__init__(parent)
@@ -155,6 +199,7 @@ class MagnifierWindow(QWidget):
         self._cap = CaptureThread(capture_engine, config)
         self._cap.frame_ready.connect(self._on_frame)
         self._cap.start()
+        self._cap.set_fps(config.fps)
 
         self._fps_timer = QTimer(self)
         self._fps_timer.setInterval(1000)
@@ -192,6 +237,7 @@ class MagnifierWindow(QWidget):
         self.config.opacity       = self.windowOpacity()
         self.config.click_through = self._click_through
         self.config.show_hud      = self._show_hud
+        self.config.dwm_mode      = self._dwm_mode
 
     def set_selection_overlay(self, overlay: SelectionOverlay):
         self.selection_overlay = overlay
@@ -432,11 +478,16 @@ class MagnifierWindow(QWidget):
     def wheelEvent(self, e):
         if self._click_through:
             return
-        dy = e.angleDelta().y()
-        op = max(0.1, min(1.0, self.windowOpacity() + dy / 1200.0))
-        self.setWindowOpacity(op)
-        self.config.opacity = op
-        self.update()
+        shift = e.modifiers() & Qt.KeyboardModifier.ShiftModifier
+        step  = 20 if shift else 5
+        delta = step if e.angleDelta().y() > 0 else -step
+        g     = self.geometry()
+        new_w = max(MIN_W, g.width()  + delta)
+        new_h = max(MIN_H, g.height() + delta)
+        cx    = g.x() + g.width()  // 2
+        cy    = g.y() + g.height() // 2
+        self.setGeometry(cx - new_w // 2, cy - new_h // 2, new_w, new_h)
+        self._save_config()
 
     # ── 우클릭 메뉴 — 3개 항목만 ─────────────────────────────
 
@@ -447,6 +498,9 @@ class MagnifierWindow(QWidget):
         menu.addAction("설정 패널").triggered.connect(self._show_panel)
         menu.addSeparator()
         menu.addAction("대상 창 지정").triggered.connect(self._pick_target_window)
+        menu.addAction("크기 직접 입력...").triggered.connect(self._size_input_dialog)
+        menu.addSeparator()
+        menu.addAction("프리셋으로 저장...").triggered.connect(self._save_preset_from_menu)
         menu.addSeparator()
         menu.addAction("이 확대기 닫기").triggered.connect(self.close)
 
@@ -481,6 +535,9 @@ class MagnifierWindow(QWidget):
             hwnd, GWL_EXSTYLE, ex | WS_EX_TRANSPARENT | WS_EX_LAYERED
         )
         self._click_through = True
+        # Feature 6: 선택 오버레이에도 동기화
+        if self.selection_overlay:
+            self.selection_overlay.set_click_through(True)
         print(f"[확대기 #{self.mag_id}] 클릭 투과 활성화")
 
     def _disable_click_through(self):
@@ -490,23 +547,210 @@ class MagnifierWindow(QWidget):
             hwnd, GWL_EXSTYLE, ex & ~WS_EX_TRANSPARENT & ~WS_EX_LAYERED
         )
         self._click_through = False
+        # Feature 6: 선택 오버레이에도 동기화
+        if self.selection_overlay:
+            self.selection_overlay.set_click_through(False)
         print(f"[확대기 #{self.mag_id}] 클릭 투과 해제")
+
+    # ── 프리셋 저장 ──────────────────────────────────────────
+
+    def _save_preset_from_menu(self):
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "프리셋 저장", "프리셋 이름을 입력하세요:")
+        if ok and name.strip():
+            self.save_preset_requested.emit(name.strip())
+
+    # ── 크기 직접 입력 ────────────────────────────────────────
+
+    def _size_input_dialog(self):
+        from PySide6.QtWidgets import (
+            QDialog, QDialogButtonBox, QFormLayout,
+            QSpinBox, QGroupBox, QVBoxLayout,
+        )
+        _DLG_STYLE = """
+            QDialog, QWidget { background: #1e1e1e; color: #e0e0e0;
+                               font-family: Consolas; font-size: 11px; }
+            QGroupBox { border: 1px solid #444; border-radius: 4px;
+                        margin-top: 8px; padding-top: 6px; color: #888;
+                        font-size: 10px; }
+            QSpinBox  { background: #2a2a2a; color: #e0e0e0;
+                        border: 1px solid #484848; border-radius: 3px; padding: 3px; }
+            QPushButton { background: #2a2a2a; border: 1px solid #484848;
+                          border-radius: 4px; padding: 5px 14px; color: #e0e0e0; }
+            QPushButton:hover { background: #383838; }
+        """
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"크기 직접 입력  —  확대기 #{self.mag_id}")
+        dlg.setStyleSheet(_DLG_STYLE)
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(8)
+
+        # 캡처 영역
+        sel_box  = QGroupBox("캡처 영역 (Selection Overlay)")
+        sel_form = QFormLayout(sel_box)
+        sel_w = QSpinBox(); sel_w.setRange(4, 7680); sel_w.setSuffix(" px")
+        sel_h = QSpinBox(); sel_h.setRange(4, 4320); sel_h.setSuffix(" px")
+        if self.selection_overlay:
+            sel_w.setValue(self.selection_overlay.width())
+            sel_h.setValue(self.selection_overlay.height())
+        sel_form.addRow("너비:", sel_w)
+        sel_form.addRow("높이:", sel_h)
+        layout.addWidget(sel_box)
+
+        # 확대기 창
+        out_box  = QGroupBox("확대기 창 (Magnifier Window)")
+        out_form = QFormLayout(out_box)
+        out_w = QSpinBox(); out_w.setRange(20, 7680); out_w.setSuffix(" px")
+        out_h = QSpinBox(); out_h.setRange(15, 4320); out_h.setSuffix(" px")
+        out_w.setValue(self.width())
+        out_h.setValue(self.height())
+        out_form.addRow("너비:", out_w)
+        out_form.addRow("높이:", out_h)
+        layout.addWidget(out_box)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        if self.selection_overlay:
+            g = self.selection_overlay.geometry()
+            self.selection_overlay.setGeometry(g.x(), g.y(), sel_w.value(), sel_h.value())
+            self.selection_overlay._save_config()
+            self.selection_overlay.region_changed.emit(self.selection_overlay.geometry())
+
+        self.resize(out_w.value(), out_h.value())
+        self._save_config()
 
     # ── 대상 창 지정 ─────────────────────────────────────────
 
     def _pick_target_window(self):
-        from PySide6.QtWidgets import QMessageBox
-        QMessageBox.information(
-            self, "대상 창 지정",
-            "확인을 누른 뒤 3초 안에 캡처할 창 위로 마우스를 올려두세요.\n"
-            "해당 창이 새 대상으로 지정됩니다."
-        )
-        QTimer.singleShot(3000, self._capture_cursor_window)
+        """
+        전체화면 Qt 오버레이 대신 WH_MOUSE_LL 저수준 마우스 훅을 설치한다.
+        훅은 외부 프로세스의 클릭도 수신할 수 있으며, 클릭을 소비하지 않으므로
+        대상 창도 정상적으로 클릭 이벤트를 받는다.
+        """
+        if getattr(self, '_picking_active', False):
+            return
+        self._picking_active = True
 
-    def _capture_cursor_window(self):
-        hwnd  = self.capture_engine.get_window_at_cursor()
-        title = self.capture_engine.get_window_title(hwnd)
-        # 이전 hwnd 의 참조 해제 → 새 hwnd 등록
+        banner = _PickerBanner()
+        banner.cancel_requested.connect(self._cancel_pick)
+        banner.show()
+        self._picker_banner = banner
+
+        # ESC 키 폴링 타이머 (80 ms 간격)
+        self._esc_timer = QTimer(self)
+        self._esc_timer.setInterval(80)
+        self._esc_timer.timeout.connect(self._check_pick_esc)
+        self._esc_timer.start()
+
+        self._install_pick_hook()
+
+    def _install_pick_hook(self):
+        """SetWindowsHookExW(WH_MOUSE_LL) 로 전역 마우스 클릭을 감지한다."""
+        WH_MOUSE_LL    = 14
+        WM_LBUTTONDOWN = 0x0201
+        user32 = ctypes.windll.user32
+
+        # HOOKPROC 서명: (nCode: int, wParam: WPARAM, lParam: LPARAM) → LRESULT
+        # 64-bit Windows 에서 LPARAM = LONG_PTR = c_longlong.
+        # c_void_p 를 쓰면 Python 이 큰 양수 int 로 받아서 CallNextHookEx 에서
+        # OverflowError 가 발생하므로 반드시 c_longlong 을 사용해야 한다.
+        HOOKPROC = ctypes.WINFUNCTYPE(
+            ctypes.c_long,
+            ctypes.c_int, ctypes.c_ulong, ctypes.c_longlong,
+        )
+
+        # CallNextHookEx 가 받는 4번째 인자도 c_longlong 으로 명시
+        user32.CallNextHookEx.restype  = ctypes.c_long
+        user32.CallNextHookEx.argtypes = [
+            ctypes.c_void_p,    # hhk
+            ctypes.c_int,       # nCode
+            ctypes.c_ulong,     # wParam
+            ctypes.c_longlong,  # lParam
+        ]
+
+        def _hook_proc(nCode, wParam, lParam):
+            if nCode >= 0 and wParam == WM_LBUTTONDOWN:
+                # 훅 핸들을 먼저 꺼내고 None 으로 초기화한 뒤 해제
+                h = self._pick_hook
+                self._pick_hook     = None
+                self._pick_hookproc = None
+                user32.UnhookWindowsHookEx(h)
+
+                # 현재 커서 위치의 루트 창 HWND 획득
+                pt = ctypes.wintypes.POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+                hwnd   = user32.WindowFromPoint(pt)
+                root   = user32.GetAncestor(hwnd, 2)  # GA_ROOT = 2
+                target = root if root else hwnd
+
+                # Qt 이벤트 루프에서 안전하게 마무리 (훅 콜백 스택 탈출)
+                QTimer.singleShot(0, lambda t=target: self._finish_pick(t))
+
+                # 클릭을 소비하지 않고 다음 훅으로 전달
+                return user32.CallNextHookEx(0, nCode, wParam, lParam)
+            return user32.CallNextHookEx(
+                self._pick_hook or 0, nCode, wParam, lParam
+            )
+
+        proc = HOOKPROC(_hook_proc)
+        self._pick_hookproc = proc          # GC 방지 — 반드시 인스턴스 변수로 유지
+        self._pick_hook = user32.SetWindowsHookExW(WH_MOUSE_LL, proc, None, 0)
+        if not self._pick_hook:
+            err = ctypes.windll.kernel32.GetLastError()
+            print(f"[확대기 #{self.mag_id}] WH_MOUSE_LL 훅 설치 실패 (오류 {err})")
+            self._cleanup_pick()
+
+    def _finish_pick(self, hwnd: int):
+        """훅이 클릭을 감지했을 때 호출 — 정리 후 창 등록."""
+        self._cleanup_pick()
+        self._on_window_picked(hwnd)
+
+    def _cancel_pick(self):
+        """배너의 취소 버튼 또는 ESC 키로 중단."""
+        if getattr(self, '_pick_hook', None):
+            ctypes.windll.user32.UnhookWindowsHookEx(self._pick_hook)
+            self._pick_hook     = None
+            self._pick_hookproc = None
+        self._cleanup_pick()
+
+    def _check_pick_esc(self):
+        """ESC 키 상태를 폴링하여 창 선택을 취소한다."""
+        VK_ESCAPE = 0x1B
+        if ctypes.windll.user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000:
+            self._cancel_pick()
+
+    def _cleanup_pick(self):
+        """배너 위젯과 타이머를 안전하게 해제한다."""
+        self._picking_active = False
+        timer = getattr(self, '_esc_timer', None)
+        if timer:
+            timer.stop()
+            timer.deleteLater()
+            self._esc_timer = None
+        banner = getattr(self, '_picker_banner', None)
+        if banner:
+            banner.close()
+            banner.deleteLater()
+            self._picker_banner = None
+
+    def _on_window_picked(self, hwnd: int):
+        if not hwnd:
+            return
+        # 자기 자신의 출력창이나 선택 오버레이는 무시
+        own_hwnds = {int(self.winId())}
+        if self.selection_overlay:
+            own_hwnds.add(int(self.selection_overlay.winId()))
+        if hwnd in own_hwnds:
+            return
+        title    = self.capture_engine.get_window_title(hwnd)
         old_hwnd = self.config.target_hwnd
         if old_hwnd != hwnd:
             if old_hwnd:
@@ -530,13 +774,19 @@ class MagnifierWindow(QWidget):
         super().resizeEvent(e)
 
     def closeEvent(self, e):
+        # 창 선택 도중 닫힐 경우 훅과 배너를 정리
+        if getattr(self, '_picking_active', False):
+            self._cancel_pick()
         self._stop_dwm()
         self._cap.stop()
         self._fps_timer.stop()
         if self._panel:
             self._panel.close()
+        # Bug 2: hide() 로 즉시 숨기고 deleteLater() 로 Qt 이벤트 루프에서 안전하게 삭제
         if self.selection_overlay:
-            self.selection_overlay.close()
+            self.selection_overlay.hide()
+            self.selection_overlay.deleteLater()
+            self.selection_overlay = None
         # 캡처 엔진의 hwnd 참조 해제 — 0 이 되면 WGC 세션이 즉시 종료된다.
         if self.config.target_hwnd:
             try:
@@ -544,4 +794,6 @@ class MagnifierWindow(QWidget):
             except Exception:
                 pass
         self._save_config()
+        # Bug 1: Manager 에 알려 _magnifiers 에서 제거하고 트레이 목록을 갱신
+        self.closed.emit()
         super().closeEvent(e)

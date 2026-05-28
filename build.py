@@ -73,11 +73,11 @@ def build(onefile=False, debug=False):
         "--hidden-import=PySide6.QtCore",
         "--hidden-import=PySide6.QtGui",
         "--hidden-import=PySide6.QtWidgets",
-        "--hidden-import=win32api",
-        "--hidden-import=win32con",
-        "--hidden-import=win32gui",
-        "--hidden-import=pywintypes",
         "--hidden-import=numpy",
+        # winrt 네임스페이스 패키지는 함수 안에서 늦게 import 되므로
+        # PyInstaller 의 정적 분석으로는 안 잡힌다. 서브모듈/데이터/네이티브
+        # .pyd 를 통째로 끌고 와야 패키징된 exe 에서도 WGC 가 동작한다.
+        "--collect-all=winrt",
         "--exclude-module=matplotlib",
         "--exclude-module=scipy",
         "--exclude-module=pandas",

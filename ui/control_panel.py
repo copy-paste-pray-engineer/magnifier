@@ -107,7 +107,7 @@ _BTN_INACTIVE = (
 )
 
 # HUD 약어
-_METHOD_SHORT = {"auto": "AUTO", "wgc": "WGC", "bitblt": "GDI"}
+_METHOD_SHORT = {"auto": "AUTO", "wgc": "WGC", "bitblt": "GDI", "printwindow": "PW"}
 
 
 class _Sep(QFrame):
@@ -234,15 +234,16 @@ class ControlPanel(QWidget):
         self._btn_high = QPushButton("고성능")
         self._btn_high.setFixedHeight(46)
         self._btn_high.setToolTip(
-            "고성능 모드 (WGC)\n\n"
-            "GPU 가속, 비활성/가려진 창 캡처, 게임 화면 캡처."
+            "고성능 모드 (PrintWindow / DWM)\n\n"
+            "DX·OpenGL 창, 비활성/가려진 창, 게임 화면 캡처.\n"
+            "노란 테두리 없음. 추가 설치 불필요."
         )
 
         self._btn_low = QPushButton("저사양")
         self._btn_low.setFixedHeight(46)
         self._btn_low.setToolTip(
-            "저사양 모드 \n\n"
-            "뭔가 뭔가 작동 안 할 수 있음"
+            "저사양 모드 (DWM 썸네일)\n\n"
+            "CPU 사용 최소. 픽셀 데이터 접근 불가 — 줌 비율이 고정됩니다."
         )
 
         btn_row.addWidget(self._btn_high)
@@ -303,6 +304,12 @@ class ControlPanel(QWidget):
         self._op_sl.blockSignals(False)
         self._op_v.setText(f"{op}%")
 
+        fps = w.config.fps
+        self._fps_sl.blockSignals(True)
+        self._fps_sl.setValue(fps)
+        self._fps_sl.blockSignals(False)
+        self._fps_v.setText(str(fps))
+
         self._hud_chk.blockSignals(True)
         self._hud_chk.setChecked(w._show_hud)
         self._hud_chk.blockSignals(False)
@@ -313,12 +320,12 @@ class ControlPanel(QWidget):
     # ── 캡처 방법 버튼 ───────────────────────────────────────
 
     def _on_high_perf(self):
-        """고성능(WGC) — DWM 모드 끄고 WGC 캡처 활성화"""
+        """고성능(PrintWindow) — DWM 모드 끄고 PrintWindow 캡처 활성화"""
         if self.w._dwm_mode:
             self.w.set_dwm_mode(False)
-        self.w.capture_engine._active = "wgc"
+        self.w.capture_engine._active = "printwindow"
         self._update_cap_buttons()
-        print(f"[확대기 #{self.mag_id}] 고성능 모드 (WGC)")
+        print(f"[확대기 #{self.mag_id}] 고성능 모드 (PrintWindow)")
 
     def _on_low_spec(self):
         """저사양(DWM) — DWM 썸네일 모드 활성화"""
@@ -338,19 +345,16 @@ class ControlPanel(QWidget):
         else:
             self._btn_high.setStyleSheet(_BTN_ACTIVE)
             self._btn_low.setStyleSheet(_BTN_INACTIVE)
-            # _active 문자열이 아닌 실제 패키지 가용 여부로 판단
-            try:
-                from capture.wgc_capture import wgc_available
-                _wgc_ok = wgc_available()
-            except Exception:
-                _wgc_ok = False
-            active = getattr(w.capture_engine, "_active", "bitblt")
-            if active == "wgc" and _wgc_ok:
+            active = getattr(w.capture_engine, "_active", "printwindow")
+            if active == "printwindow":
+                self._cap_status.setText(
+                    " PrintWindow "
+                )
+            elif active == "wgc":
                 self._cap_status.setText("WGC 캡처 중  —  GPU 가속, 비활성 창 지원")
             else:
                 self._cap_status.setText(
-                    "BitBlt 캡처 중  —  화면에 보이는 영역만\n"
-                    "고성능 모드: 가상환경에 winrt 패키지 설치 후 재시작"
+                    "BitBlt 캡처 중  —  화면에 보이는 영역만 (DX 창 미지원)"
                 )
     # ── 슬롯 ─────────────────────────────────────────────────
 
@@ -361,6 +365,7 @@ class ControlPanel(QWidget):
 
     def _on_fps(self, v: int):
         self._fps_v.setText(str(v))
+        self.w.config.fps = v
         if not self.w._dwm_mode:
             self.w._cap.set_fps(v)
 

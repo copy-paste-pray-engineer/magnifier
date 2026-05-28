@@ -36,7 +36,12 @@ RESIZE_SE = 8
 
 HANDLE_SIZE = 10   # 리사이즈 핸들 크기
 BORDER_WIDTH = 3   # 테두리 두께
-MIN_SIZE = 40      # 최소 크기
+MIN_SIZE = 4       # 최소 크기 (Feature 3: 4px 까지 허용)
+
+# Win32 클릭 투과 스타일 (Feature 6)
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_LAYERED     = 0x00080000
+GWL_EXSTYLE       = -20
 
 
 class SelectionOverlay(QWidget):
@@ -63,6 +68,7 @@ class SelectionOverlay(QWidget):
         self._drag_origin: Optional[QRect] = None
         self._resize_dir = RESIZE_NONE
         self._is_dragging = False
+        self._click_through = False  # Feature 6
 
         self._setup_window()
         self._apply_config()
@@ -104,6 +110,10 @@ class SelectionOverlay(QWidget):
     # ─── 그리기 ──────────────────────────────────────────
 
     def paintEvent(self, event):
+        # Feature 6: 클릭 투과 모드일 때는 아무것도 그리지 않음 → WA_TranslucentBackground 덕분에 완전 투명
+        if self._click_through:
+            return
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -289,6 +299,39 @@ class SelectionOverlay(QWidget):
         if self.output_window:
             self.output_window.activateWindow()
             self.output_window.raise_()
+
+    # ─── 휠 리사이즈 (Feature 4) ──────────────────────────
+    def wheelEvent(self, event):
+        """스크롤: ±1px / Shift+스크롤: ±10px  (중심 고정 리사이즈)"""
+        shift = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+        step  = 10 if shift else 1
+        delta = step if event.angleDelta().y() > 0 else -step
+
+        geo   = self.geometry()
+        new_w = max(MIN_SIZE, geo.width()  + delta)
+        new_h = max(MIN_SIZE, geo.height() + delta)
+        # 중심을 기준으로 양쪽으로 같이 늘이거나 줄임
+        cx    = geo.x() + geo.width()  // 2
+        cy    = geo.y() + geo.height() // 2
+        self.setGeometry(cx - new_w // 2, cy - new_h // 2, new_w, new_h)
+        self._save_config()
+        self.region_changed.emit(self.geometry())
+
+    # ─── 클릭 투과 (Feature 6) ───────────────────────────
+    def set_click_through(self, enabled: bool):
+        """출력창 클릭 투과 토글에 맞춰 선택 오버레이도 동기화."""
+        self._click_through = enabled
+        hwnd = int(self.winId())
+        ex   = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        if enabled:
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd, GWL_EXSTYLE, ex | WS_EX_TRANSPARENT | WS_EX_LAYERED
+            )
+        else:
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd, GWL_EXSTYLE, ex & ~WS_EX_TRANSPARENT & ~WS_EX_LAYERED
+            )
+        self.update()  # paintEvent 재호출 → 테두리 표시/숨김 반영
 
     def get_region(self) -> QRect:
         """현재 선택 영역 (화면 절대 좌표)"""

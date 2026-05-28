@@ -1,0 +1,51 @@
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# 가상환경
+.venv/
+venv/
+env/
+ENV/
+
+# 패키징 / 배포
+*.egg-info/
+*.egg
+dist/
+build/
+pip-wheel-metadata/
+
+# ── PyInstaller (build.py 산출물) ─────────────────────────
+*.spec
+runtime_hook.py
+version_info.txt
+
+# ── 테스트 산출물 ─────────────────────────────────────────
+test_capture.png
+test_window.png
+
+# ── 사용자 설정 (런타임에 %APPDATA%\WinMagnifier 에 저장되지만,
+#    혹시 로컬 경로로 떨어지는 경우 대비) ──────────────────
+settings.json
+
+# ── IDE / 에디터 ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Claude Code ───────────────────────────────────────────
+.claude/
+
+# ── OS ────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# ── 로그 ──────────────────────────────────────────────────
+*.log
