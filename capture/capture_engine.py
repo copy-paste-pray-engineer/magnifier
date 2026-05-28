@@ -20,7 +20,7 @@ DWM 썸네일:
 """
 import ctypes
 import ctypes.wintypes as wintypes
-from ctypes import windll, byref, c_int
+from ctypes import windll, byref, c_int, c_void_p
 from typing import Optional, Tuple, Dict
 import numpy as np
 
@@ -28,6 +28,10 @@ SRCCOPY    = 0x00CC0020
 CAPTUREBLT = 0x40000000
 DIB_RGB_COLORS = 0
 BI_RGB     = 0
+
+# PrintWindow 플래그 (Windows 8.1+)
+# DWM 합성 프레임을 그대로 복사 → DX/GPU 창 백그라운드 캡처 가능
+PW_RENDERFULLCONTENT = 0x00000002
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -70,6 +74,44 @@ class _GDI:
         self.g.DeleteDC(hdc_mem)
         self.u.ReleaseDC(None, hdc_scr)
         return frame
+
+    def capture_window_printwindow(self, hwnd: int, rx: int, ry: int,
+                                   rw: int, rh: int) -> Optional[np.ndarray]:
+        """
+        PrintWindow(PW_RENDERFULLCONTENT) — DWM 합성 프레임을 HDC 로 복사.
+        DirectX / OpenGL / GPU 가속 창을 비활성(백그라운드) 상태에서도 캡처.
+        노란 테두리(WGC 캡처 표시자) 없음. Windows 8.1+ 에서 동작.
+        """
+        rect = RECT()
+        self.u.GetWindowRect(hwnd, byref(rect))
+        ww = rect.right  - rect.left
+        wh = rect.bottom - rect.top
+        if ww <= 0 or wh <= 0:
+            return None
+
+        hdc_scr = self.u.GetDC(None)       # 화면 DC — 색상 형식 기준
+        if not hdc_scr:
+            return None
+        hdc_mem = self.g.CreateCompatibleDC(hdc_scr)
+        hbmp    = self.g.CreateCompatibleBitmap(hdc_scr, ww, wh)
+        old     = self.g.SelectObject(hdc_mem, hbmp)
+
+        # DWM compositor 에게 창 내용을 hdc_mem 에 그리도록 요청
+        ok    = self.u.PrintWindow(hwnd, hdc_mem, PW_RENDERFULLCONTENT)
+        frame = self._read(hdc_mem, hbmp, ww, wh) if ok else None
+
+        self.g.SelectObject(hdc_mem, old)
+        self.g.DeleteObject(hbmp)
+        self.g.DeleteDC(hdc_mem)
+        self.u.ReleaseDC(None, hdc_scr)
+
+        if frame is None:
+            return None
+        cx = rx - rect.left;  cy = ry - rect.top
+        fh, fw = frame.shape[:2]
+        x1, y1 = max(0, cx), max(0, cy)
+        x2, y2 = min(fw, cx + rw), min(fh, cy + rh)
+        return frame[y1:y2, x1:x2] if x2 > x1 and y2 > y1 else None
 
     def capture_window_region(self, hwnd: int, rx: int, ry: int,
                                rw: int, rh: int) -> Optional[np.ndarray]:
@@ -141,9 +183,13 @@ class CaptureEngine:
         self._wgc_refcount: Dict[int, int]    = {}
 
         if method == "auto":
-            self._active = "wgc" if _check_wgc() else "bitblt"
+            # PrintWindow + PW_RENDERFULLCONTENT 를 기본으로 사용.
+            # WGC 와 달리 캡처 표시자(노란 테두리)가 없고 DX/GPU 창도 지원.
+            self._active = "printwindow"
+        elif method in ("wgc", "printwindow", "bitblt"):
+            self._active = method
         else:
-            self._active = method if method in ("wgc", "bitblt") else "bitblt"
+            self._active = "printwindow"
 
         print(f"캡처 방법: {self._active.upper()}")
 
@@ -172,18 +218,31 @@ class CaptureEngine:
                 region_w: int, region_h: int) -> Optional[np.ndarray]:
         if region_w <= 0 or region_h <= 0:
             return None
+        if not hwnd:
+            return None  # 대상 창 없음 — 화면 전체 캡처 금지 (재귀 렌더링 방지)
 
-        if self._active == "wgc" and hwnd:
+        if not windll.user32.IsWindow(hwnd):
+            return None
+
+        # ── WGC (명시적으로 지정한 경우만) ───────────────────────
+        if self._active == "wgc":
             frame = self._capture_wgc(hwnd, region_x, region_y, region_w, region_h)
             if frame is not None:
                 return frame
-            # WGC 실패 시 자동 fallback
+            # WGC 실패 → PrintWindow 로 fallback (DX 창 지원 유지)
 
-        # BitBlt
-        if hwnd and windll.user32.IsWindow(hwnd):
-            return self._gdi.capture_window_region(
+        # ── PrintWindow + DWM (기본값 및 WGC fallback) ───────────
+        # bitblt 전용 모드가 아닌 경우: DWM compositor 프레임 캡처 시도
+        if self._active != "bitblt":
+            frame = self._gdi.capture_window_printwindow(
                 hwnd, region_x, region_y, region_w, region_h)
-        return self._gdi.capture_screen_region(region_x, region_y, region_w, region_h)
+            if frame is not None:
+                return frame
+
+        # ── BitBlt (최후 수단) ───────────────────────────────────
+        # DX 전용 창에서는 빈 화면이 나올 수 있으나 항상 동작함
+        return self._gdi.capture_window_region(
+            hwnd, region_x, region_y, region_w, region_h)
 
     def capture_screen_region(self, x: int, y: int, w: int, h: int
                                ) -> Optional[np.ndarray]:
@@ -197,9 +256,12 @@ class CaptureEngine:
             if hwnd not in self._wgc_sessions:
                 sess = WGCSession(hwnd)
                 if not sess.ok:
+                    self._wgc_sessions[hwnd] = None  # 실패 캐시 — 재시도 방지
                     return None
                 self._wgc_sessions[hwnd] = sess
-            sess  = self._wgc_sessions[hwnd]
+            sess = self._wgc_sessions[hwnd]
+            if sess is None:  # 이전에 실패한 hwnd
+                return None
             frame = sess.get_latest_frame()
             if frame is None:
                 return None
@@ -232,6 +294,47 @@ class CaptureEngine:
         buf = ctypes.create_unicode_buffer(256)
         windll.user32.GetWindowTextW(hwnd, buf, 256)
         return buf.value
+
+    def get_process_name(self, hwnd: int) -> str:
+        """HWND 에서 프로세스 실행 파일명 반환 (예: 'chrome.exe'). 실패 시 ''."""
+        if not hwnd:
+            return ""
+        pid = wintypes.DWORD(0)
+        windll.user32.GetWindowThreadProcessId(hwnd, byref(pid))
+        if not pid.value:
+            return ""
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        h = windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not h:
+            return ""
+        try:
+            buf  = ctypes.create_unicode_buffer(260)
+            size = wintypes.DWORD(260)
+            windll.kernel32.QueryFullProcessImageNameW(h, 0, buf, byref(size))
+            path = buf.value
+            return path.rsplit("\\", 1)[-1] if path else ""
+        finally:
+            windll.kernel32.CloseHandle(h)
+
+    def find_window_by_process(self, process_name: str) -> int:
+        """실행 파일명과 일치하는 최상위 가시 창의 HWND 반환 (없으면 0)."""
+        if not process_name:
+            return 0
+        found: list = []
+        target = process_name.lower()
+
+        _CB = ctypes.WINFUNCTYPE(c_int, c_void_p, c_void_p)
+
+        @_CB
+        def _cb(hwnd, _):
+            if windll.user32.IsWindowVisible(hwnd):
+                if self.get_process_name(hwnd).lower() == target:
+                    found.append(hwnd)
+                    return 0
+            return 1
+
+        windll.user32.EnumWindows(_cb, 0)
+        return found[0] if found else 0
 
     def release_wgc_session(self, hwnd: int):
         sess = self._wgc_sessions.pop(hwnd, None)
