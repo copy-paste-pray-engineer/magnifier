@@ -10,6 +10,7 @@ IInspectable 상속 인터페이스는 [0-5] 가 IUnknown+IInspectable 이므로
 """
 from __future__ import annotations
 import ctypes
+import logging
 import threading
 from ctypes import (
     c_void_p, c_uint, c_int, c_long, c_ulong, c_ushort, c_ubyte, c_int64,
@@ -18,13 +19,15 @@ from ctypes import (
 from typing import Optional
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 
 # ── WGC 가용성 ────────────────────────────────────────────────────
 def wgc_available() -> bool:
     """pure ctypes COM 방식 — winrt 패키지 불필요. d3d11.dll + combase.dll 확인."""
     try:
-        ctypes.windll.d3d11
-        ctypes.windll.combase
+        _ = ctypes.windll.d3d11
+        _ = ctypes.windll.combase
         return True
     except OSError:
         return False
@@ -72,10 +75,11 @@ _VT_Frame_get_Surface        = 6
 # IGraphicsCaptureSession (IInspectable 상속)
 _VT_Sess_StartCapture        = 6
 
-# IGraphicsCaptureSession2 (IInspectable 직접 상속 — v1 과 별개 인터페이스)
+# IGraphicsCaptureSession3 (IInspectable 직접 상속 — v1 과 별개 인터페이스)
 # vtable: [0-2]=IUnknown, [3-5]=IInspectable, [6]=get_IsBorderRequired, [7]=put_IsBorderRequired
-_VT_Sess2_get_IsBorderRequired = 6
-_VT_Sess2_put_IsBorderRequired = 7
+# 주의: IsBorderRequired 는 Session2(IsCursorCaptureEnabled)가 아니라 Session3 소속.
+_VT_Sess3_get_IsBorderRequired = 6
+_VT_Sess3_put_IsBorderRequired = 7
 
 # IClosable::Close (IInspectable 상속)
 _VT_Closable_Close           = 6
@@ -93,6 +97,10 @@ class GUID(Structure):
         ("Data4", c_ubyte * 8),
     ]
 
+def _guid_equal(a: GUID, b: GUID) -> bool:
+    return bytes(a) == bytes(b)
+
+
 def _guid(s: str) -> GUID:
     s = s.strip("{}").replace("-", "")
     g = GUID()
@@ -108,8 +116,8 @@ def _guid(s: str) -> GUID:
 IID_IGraphicsCaptureItemInterop    = _guid("{3628E81B-3CAC-4C60-B7F4-23CE0E0C3356}")
 # IGraphicsCaptureItem
 IID_IGraphicsCaptureItem           = _guid("{79C3F95B-31F7-4EC2-A464-632EF5D30760}")
-# IGraphicsCaptureSession2 — put_IsBorderRequired (Windows 10 2004+)
-IID_IGraphicsCaptureSession2       = _guid("{2C02B7D3-836C-4B3E-A6BC-E46D8B002F09}")
+# IGraphicsCaptureSession3 — put_IsBorderRequired (Windows 10 21H1+ / Windows 11)
+IID_IGraphicsCaptureSession3       = _guid("{F2CDD966-22AE-5EA1-9596-3A289344C3BE}")
 # IDirect3D11CaptureFramePoolStatics2 (CreateFreeThreaded)
 IID_IDirect3D11CaptureFramePoolSt2 = _guid("{589B103F-6BBC-5DF5-A991-02E28B3B66D5}")
 # IClosable (Windows.Foundation)
@@ -118,6 +126,21 @@ IID_IClosable                      = _guid("{30D5A829-7FA4-4026-83BB-D75BAE4EA99
 IID_IDirect3DDxgiInterfaceAccess   = _guid("{A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1}")
 IID_ID3D11Texture2D                = _guid("{6F15AAF2-D208-4E89-9AB4-489535D34F9C}")
 IID_IDXGIDevice                    = _guid("{54EC77FA-1377-44E6-8C32-88FD5F44C84C}")
+
+# 프레임 콜백 핸들러가 QueryInterface 에서 수락하는 IID 들.
+IID_IUnknown                       = _guid("{00000000-0000-0000-C000-000000000046}")
+# IAgileObject — 마커 인터페이스(메서드 없음). 이걸 수락하면 WinRT 가
+# 핸들러를 스레드 간 마샬링 없이 그대로 호출한다 (free-threaded 풀에 적합).
+IID_IAgileObject                   = _guid("{94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90}")
+# ITypedEventHandler<Direct3D11CaptureFramePool*, IInspectable*> 의
+# parameterized IID. WinRT 표준 알고리즘(UUID v5, SHA-1)으로 계산:
+#   uuid5(11f47ad5-7b73-42c0-abae-878b1e16adee,
+#         "pinterface({9de1c534-6ae1-11e0-84e1-18a905bcc53f};"
+#         "rc(Windows.Graphics.Capture.Direct3D11CaptureFramePool;"
+#         "{24b5d8fd-f76a-4eba-9b88-32a3a35b3eaf});cinterface(IInspectable))")
+IID_FrameArrivedHandler            = _guid("{F810DB63-93F2-5FE6-A429-4BF67D98E90C}")
+
+E_NOINTERFACE = -2147467262  # 0x80004002
 
 
 # ── 구조체 ────────────────────────────────────────────────────────
@@ -157,17 +180,17 @@ class D3D11_MAPPED_SUBRESOURCE(Structure):
 
 
 # ── COM vtable 호출 헬퍼 ──────────────────────────────────────────
-def _vtbl(p: int):
+def _vtbl(p: int) -> ctypes.Array:
     vtbl_addr = ctypes.cast(p, POINTER(c_void_p))[0]
     return ctypes.cast(vtbl_addr, POINTER(c_void_p * 128))[0]
 
-def _call(p: int, idx: int, proto):
+def _call(p: int, idx: int, proto: type) -> object:
     return proto(_vtbl(p)[idx])
 
 _RELEASE_PROTO = WINFUNCTYPE(c_ulong, c_void_p)
 _QI_PROTO      = WINFUNCTYPE(c_long,  c_void_p, POINTER(GUID), POINTER(c_void_p))
 
-def _com_release(p: int):
+def _com_release(p: int) -> None:
     if p:
         _call(p, _VT_Release, _RELEASE_PROTO)(p)
 
@@ -178,7 +201,7 @@ def _com_query(p: int, iid: GUID) -> int:
     hr  = _call(p, _VT_QueryInterface, _QI_PROTO)(p, byref(iid), byref(out))
     return out.value if (hr == 0 and out.value) else 0
 
-def _closable_close_and_release(ptr: int):
+def _closable_close_and_release(ptr: int) -> None:
     """IClosable::Close 호출 후 Release. 실패해도 Release 는 항상 수행."""
     if not ptr:
         return
@@ -264,7 +287,7 @@ class WGCSession:
     순수 ctypes COM vtable 호출 — winrt Python 패키지 불필요.
     """
 
-    def __init__(self, hwnd: int):
+    def __init__(self, hwnd: int) -> None:
         self.hwnd     = hwnd
         self._frame:  Optional[np.ndarray] = None
         self._lock    = threading.Lock()
@@ -276,6 +299,7 @@ class WGCSession:
         self._d3d_context = 0
         self._staging     = 0
         self._stg_w = self._stg_h = self._stg_fmt = 0
+        self._pool_size: tuple[int, int] = (0, 0)
 
         # WGC COM 포인터 (close 에서 Release)
         self._item_ptr    = 0
@@ -292,12 +316,12 @@ class WGCSession:
 
         try:
             self._init_com()
-        except Exception as e:
-            print(f"[WGC] 초기화 실패 (hwnd={hwnd:#x}): {e}")
-            self._cleanup()
+        except Exception:
+            logger.exception("[WGC] 초기화 실패 (hwnd=%#x)", hwnd)
+            self.close()  # 부분 생성된 자원 회수 — 각 포인터를 개별 검사하므로 안전
 
     # ── 초기화 ────────────────────────────────────────────────────
-    def _init_com(self):
+    def _init_com(self) -> None:
         cb = ctypes.windll.combase
         cb.RoInitialize.restype = c_long
         hr = cb.RoInitialize(1)  # RO_INIT_MULTITHREADED
@@ -349,7 +373,8 @@ class WGCSession:
         _com_release(pool_fac)
         if (hr2 & 0xFFFFFFFF) or not pool_out.value:
             raise OSError(f"CreateFreeThreaded 실패: hr={hr2 & 0xFFFFFFFF:#010x}")
-        self._pool_ptr = pool_out.value
+        self._pool_ptr  = pool_out.value
+        self._pool_size = (size.Width, size.Height)
 
         # 7) ITypedEventHandler COM 객체 구성
         self._setup_handler()
@@ -374,33 +399,27 @@ class WGCSession:
             raise OSError(f"CreateCaptureSession 실패: hr={hr4 & 0xFFFFFFFF:#010x}")
         self._session_ptr = sess_out.value
 
-        # 9.5) 노란 테두리 비활성화 (IGraphicsCaptureSession2, Windows 10 2004+)
-        # IGraphicsCaptureSession2 는 IInspectable 을 직접 상속하는 별개 인터페이스.
+        # 9.5) 노란 테두리 비활성화 (IGraphicsCaptureSession3, Windows 10 21H1+)
+        # IGraphicsCaptureSession3 은 IInspectable 을 직접 상속하는 별개 인터페이스.
         # vtable: [6]=get_IsBorderRequired, [7]=put_IsBorderRequired
         _border_ok = False
-        sess2 = _com_query(self._session_ptr, IID_IGraphicsCaptureSession2)
-        if sess2:
+        sess3 = _com_query(self._session_ptr, IID_IGraphicsCaptureSession3)
+        if sess3:
             try:
                 proto_b = WINFUNCTYPE(c_long, c_void_p, c_ubyte)
-                # vtable index 7 을 먼저 시도, 실패 시 index 8 (구현체 레이아웃 차이 대응)
-                for idx in (_VT_Sess2_put_IsBorderRequired, _VT_Sess2_put_IsBorderRequired + 1):
-                    try:
-                        hr_b = proto_b(_vtbl(sess2)[idx])(sess2, 0)
-                        if (hr_b & 0xFFFFFFFF) == 0:
-                            _border_ok = True
-                            break
-                    except Exception:
-                        pass
+                hr_b = proto_b(_vtbl(sess3)[_VT_Sess3_put_IsBorderRequired])(sess3, 0)
+                _border_ok = (hr_b & 0xFFFFFFFF) == 0
                 if _border_ok:
-                    print("[WGC] 노란 테두리 비활성화 성공")
+                    logger.info("[WGC] 노란 테두리 비활성화 성공")
                 else:
-                    print("[WGC] 노란 테두리 비활성화 실패 — GDI 폴백 권장")
-            except Exception as e:
-                print(f"[WGC] 노란 테두리 비활성화 예외: {e}")
+                    logger.warning("[WGC] 노란 테두리 비활성화 실패: hr=%#010x",
+                                   hr_b & 0xFFFFFFFF)
+            except Exception:
+                logger.exception("[WGC] 노란 테두리 비활성화 예외")
             finally:
-                _com_release(sess2)
+                _com_release(sess3)
         else:
-            print("[WGC] IGraphicsCaptureSession2 미지원 (Windows 10 버전 2004 미만)")
+            logger.info("[WGC] IGraphicsCaptureSession3 미지원 (Windows 10 21H1 미만)")
         self.border_suppressed: bool = _border_ok
 
         # 10) StartCapture [6]
@@ -410,28 +429,37 @@ class WGCSession:
             raise OSError(f"StartCapture 실패: hr={hr5 & 0xFFFFFFFF:#010x}")
 
         self._init_ok = True
-        print(f"[WGC] 캡처 시작: hwnd={self.hwnd:#x}, size={size.Width}x{size.Height}")
+        logger.info("[WGC] 캡처 시작: hwnd=%#x, size=%dx%d",
+                    self.hwnd, size.Width, size.Height)
 
     # ── ITypedEventHandler 구현 ────────────────────────────────────
-    def _setup_handler(self):
+    def _setup_handler(self) -> None:
         """
         ITypedEventHandler<Direct3D11CaptureFramePool*, IInspectable*> 를
         ctypes 로 구현합니다. 콜백 함수 객체는 GC 를 막기 위해 self 에 보관합니다.
         """
         wgc_self = self
 
+        # 수락 IID 외에는 반드시 E_NOINTERFACE 를 돌려줘야 한다.
+        # 무조건 성공시키면 런타임이 IMarshal 등으로 착각하고 vtable 4칸
+        # 너머의 메서드를 호출해 access violation 이 난다.
+        _accepted = (IID_IUnknown, IID_IAgileObject, IID_FrameArrivedHandler)
+
         def _qi(this, riid, ppv):
-            if ppv:
+            if not ppv:
+                return E_NOINTERFACE
+            if riid and any(_guid_equal(riid[0], a) for a in _accepted):
                 ctypes.cast(ppv, POINTER(c_void_p))[0] = this
-            return 0
+                return 0
+            ctypes.cast(ppv, POINTER(c_void_p))[0] = None
+            return E_NOINTERFACE
         def _ar(this): return 2
         def _rl(this): return 1
         def _invoke(this, sender, args):
-            if not wgc_self._closed:
-                try:
-                    wgc_self._frame_callback(sender)
-                except Exception:
-                    pass
+            try:
+                wgc_self._frame_callback(sender)
+            except Exception:
+                logger.exception("[WGC] 프레임 콜백 예외")
             return 0
 
         _QI_P  = WINFUNCTYPE(c_long,  c_void_p, POINTER(GUID), POINTER(c_void_p))
@@ -454,32 +482,57 @@ class WGCSession:
         self._h_ptr = ctypes.addressof(self._h_obj)
 
     # ── 프레임 콜백 ────────────────────────────────────────────────
-    def _frame_callback(self, pool_ptr: int):
-        if self._closed:
-            return
+    def _frame_callback(self, pool_ptr: int) -> None:
+        # 콜백 전체를 _lock 으로 감싼다. close() 가 같은 락 안에서 _closed 를
+        # 세우므로, 진행 중인 콜백이 끝나기 전에는 D3D 자원이 해제되지 않는다
+        # (use-after-free 방지). remove_FrameArrived 는 진행 중 콜백의 완료를
+        # 보장하지 않기 때문에 락 없이는 race 가 남는다.
+        with self._lock:
+            if self._closed:
+                return
+            self._recreate_pool_if_resized(pool_ptr)
 
-        # TryGetNextFrame [7]: () → IDirect3D11CaptureFrame*
-        frame_out = c_void_p()
-        proto = WINFUNCTYPE(c_long, c_void_p, POINTER(c_void_p))
-        hr = proto(_vtbl(pool_ptr)[_VT_FP_TryGetNextFrame])(pool_ptr, byref(frame_out))
-        if (hr & 0xFFFFFFFF) or not frame_out.value:
-            return
-        frame_ptr = frame_out.value
-        try:
-            # get_Surface [6]: () → IDirect3DSurface* (IInspectable)
-            surf_out = c_void_p()
-            proto2 = WINFUNCTYPE(c_long, c_void_p, POINTER(c_void_p))
-            hr2 = proto2(_vtbl(frame_ptr)[_VT_Frame_get_Surface])(frame_ptr, byref(surf_out))
-            if (hr2 & 0xFFFFFFFF) == 0 and surf_out.value:
-                try:
-                    arr = self._surface_via_vtable(surf_out.value)
-                    if arr is not None:
-                        with self._lock:
+            # TryGetNextFrame [7]: () → IDirect3D11CaptureFrame*
+            frame_out = c_void_p()
+            proto = WINFUNCTYPE(c_long, c_void_p, POINTER(c_void_p))
+            hr = proto(_vtbl(pool_ptr)[_VT_FP_TryGetNextFrame])(pool_ptr, byref(frame_out))
+            if (hr & 0xFFFFFFFF) or not frame_out.value:
+                return
+            frame_ptr = frame_out.value
+            try:
+                # get_Surface [6]: () → IDirect3DSurface* (IInspectable)
+                surf_out = c_void_p()
+                proto2 = WINFUNCTYPE(c_long, c_void_p, POINTER(c_void_p))
+                hr2 = proto2(_vtbl(frame_ptr)[_VT_Frame_get_Surface])(frame_ptr, byref(surf_out))
+                if (hr2 & 0xFFFFFFFF) == 0 and surf_out.value:
+                    try:
+                        arr = self._surface_via_vtable(surf_out.value)
+                        if arr is not None:
                             self._frame = arr
-                finally:
-                    _com_release(surf_out.value)
-        finally:
-            _closable_close_and_release(frame_ptr)
+                    finally:
+                        _com_release(surf_out.value)
+            finally:
+                _closable_close_and_release(frame_ptr)
+
+    def _recreate_pool_if_resized(self, pool_ptr: int) -> None:
+        """대상 창 크기가 바뀌면 FramePool 을 새 크기로 Recreate.
+
+        풀 텍스처는 생성 시점 크기로 고정되므로, 리사이즈 후에도 그대로 두면
+        프레임에 이전 크기 기준의 잔여 영역이 섞인다.
+        """
+        size = SizeInt32()
+        proto = WINFUNCTYPE(c_long, c_void_p, POINTER(SizeInt32))
+        hr = proto(_vtbl(self._item_ptr)[_VT_GCI_get_Size])(self._item_ptr, byref(size))
+        if (hr & 0xFFFFFFFF) or size.Width <= 0 or size.Height <= 0:
+            return
+        if (size.Width, size.Height) == self._pool_size:
+            return
+        proto_r = WINFUNCTYPE(c_long, c_void_p, c_void_p, c_uint, c_int, SizeInt32)
+        hr_r = proto_r(_vtbl(pool_ptr)[_VT_FP_Recreate])(
+            pool_ptr, self._winrt_dev, DXGI_FORMAT_B8G8R8A8_UNORM, 2, size)
+        if (hr_r & 0xFFFFFFFF) == 0:
+            self._pool_size = (size.Width, size.Height)
+            logger.info("[WGC] FramePool 재생성: %dx%d", size.Width, size.Height)
 
     # ── 표면 → numpy (D3D11 staging 텍스처 경유) ─────────────────
     def _surface_via_vtable(self, surf_ptr: int) -> Optional[np.ndarray]:
@@ -564,7 +617,7 @@ class WGCSession:
         hr = _call(self._d3d_device, _VT_Dev_CreateTex2D, proto)(
             self._d3d_device, byref(desc), None, byref(out))
         if hr < 0 or not out.value:
-            print(f"[WGC] CreateTexture2D(staging) 실패: hr={hr:#010x}")
+            logger.error("[WGC] CreateTexture2D(staging) 실패: hr=%#010x", hr & 0xFFFFFFFF)
             return 0
         self._staging = out.value
         self._stg_w, self._stg_h, self._stg_fmt = w, h, fmt
@@ -582,12 +635,16 @@ class WGCSession:
         return self._init_ok
 
     # ── 정리 ──────────────────────────────────────────────────────
-    def close(self):
-        if self._closed:
-            return
-        self._closed = True
+    def close(self) -> None:
+        # _closed 플래그는 반드시 락 안에서 세운다. 락 획득이 곧 "진행 중이던
+        # 프레임 콜백이 끝났다"는 보장이고, 이후 도착하는 콜백은 _closed 검사로
+        # 자원에 손대지 않는다. 그 다음에야 안전하게 Release 할 수 있다.
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
 
-        # 콜백 해제 — remove_FrameArrived [9] 호출 후 WinRT 가 콜백 보장 종료
+        # 콜백 해제 — remove_FrameArrived [9]
         if self._pool_ptr and self._frame_token is not None:
             try:
                 proto = WINFUNCTYPE(c_long, c_void_p, EventToken)
@@ -603,19 +660,7 @@ class WGCSession:
         _com_release(self._item_ptr);                   self._item_ptr    = 0
         self._release_d3d()
 
-    def _cleanup(self):
-        """_init_com 도중 예외 발생 시 부분 정리."""
-        self._release_d3d()
-        if self._session_ptr:
-            _closable_close_and_release(self._session_ptr); self._session_ptr = 0
-        if self._pool_ptr:
-            _closable_close_and_release(self._pool_ptr);    self._pool_ptr    = 0
-        if self._winrt_dev:
-            _com_release(self._winrt_dev);                  self._winrt_dev   = 0
-        if self._item_ptr:
-            _com_release(self._item_ptr);                   self._item_ptr    = 0
-
-    def _release_d3d(self):
+    def _release_d3d(self) -> None:
         if self._staging:
             _com_release(self._staging);     self._staging     = 0
         if self._d3d_context:
@@ -623,7 +668,7 @@ class WGCSession:
         if self._d3d_device:
             _com_release(self._d3d_device);  self._d3d_device  = 0
 
-    def __del__(self):
+    def __del__(self) -> None:
         try:
             self.close()
         except Exception:

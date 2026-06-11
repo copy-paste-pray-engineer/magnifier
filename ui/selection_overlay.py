@@ -9,13 +9,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 import ctypes
 
-from PySide6.QtWidgets import QWidget, QSizeGrip
+from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import (
-    Qt, QRect, QPoint, QSize, QTimer, Signal, QRectF
+    Qt, QRect, QPoint, Signal, QRectF
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QFont, QPainterPath,
-    QKeyEvent, QMouseEvent, QCursor
+    QPainter, QColor, QPen, QFont, QKeyEvent, QMouseEvent, QCursor
 )
 
 from utils.settings import MagnifierConfig
@@ -73,7 +72,7 @@ class SelectionOverlay(QWidget):
         self._setup_window()
         self._apply_config()
 
-    def _setup_window(self):
+    def _setup_window(self) -> None:
         """윈도우 플래그 설정"""
         flags = (
             Qt.WindowType.FramelessWindowHint
@@ -90,7 +89,7 @@ class SelectionOverlay(QWidget):
         # 최소 크기
         self.setMinimumSize(MIN_SIZE, MIN_SIZE)
 
-    def _apply_config(self):
+    def _apply_config(self) -> None:
         """설정에서 위치/크기 복원"""
         self.setGeometry(
             self.config.selection_x,
@@ -99,7 +98,7 @@ class SelectionOverlay(QWidget):
             self.config.selection_h,
         )
 
-    def _save_config(self):
+    def _save_config(self) -> None:
         """현재 위치/크기를 설정에 저장"""
         geo = self.geometry()
         self.config.selection_x = geo.x()
@@ -109,7 +108,7 @@ class SelectionOverlay(QWidget):
 
     # ─── 그리기 ──────────────────────────────────────────
 
-    def paintEvent(self, event):
+    def paintEvent(self, event) -> None:
         # Feature 6: 클릭 투과 모드일 때는 아무것도 그리지 않음 → WA_TranslucentBackground 덕분에 완전 투명
         if self._click_through:
             return
@@ -153,7 +152,7 @@ class SelectionOverlay(QWidget):
         label = f"#{self.mag_id}  {w}×{h}"
         painter.drawText(BORDER_WIDTH + 4, BORDER_WIDTH + 13, label)
 
-    def _handle_positions(self):
+    def _handle_positions(self) -> list[tuple[int, int]]:
         """8방향 핸들 중심 좌표"""
         w, h = self.width(), self.height()
         cx, cy = w // 2, h // 2
@@ -199,7 +198,7 @@ class SelectionOverlay(QWidget):
 
     # ─── 마우스 이벤트 ────────────────────────────────────
 
-    def mousePressEvent(self, event: QMouseEvent):
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = event.globalPosition().toPoint()
             self._drag_origin = self.geometry()
@@ -207,7 +206,7 @@ class SelectionOverlay(QWidget):
             self._is_dragging = True
             self.setFocus()
 
-    def mouseMoveEvent(self, event: QMouseEvent):
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         pos = event.position().toPoint()
 
         if not self._is_dragging:
@@ -235,13 +234,13 @@ class SelectionOverlay(QWidget):
         self.update()
         self.region_changed.emit(self.geometry())
 
-    def mouseReleaseEvent(self, event: QMouseEvent):
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._is_dragging = False
         self._drag_start = None
         self._drag_origin = None
         self._save_config()
 
-    def _apply_resize(self, rect: QRect, delta: QPoint, direction: int):
+    def _apply_resize(self, rect: QRect, delta: QPoint, direction: int) -> None:
         """리사이즈 방향에 따라 rect 수정"""
         dx, dy = delta.x(), delta.y()
         d = direction
@@ -268,7 +267,7 @@ class SelectionOverlay(QWidget):
 
     # ─── 키보드 이벤트 ────────────────────────────────────
 
-    def keyPressEvent(self, event: QKeyEvent):
+    def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
         shift = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
         step = 10 if shift else 1
@@ -294,14 +293,14 @@ class SelectionOverlay(QWidget):
 
     # ─── 더블클릭 ──────────────────────────────────────────
 
-    def mouseDoubleClickEvent(self, event: QMouseEvent):
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         """더블클릭: 출력창 포커스"""
         if self.output_window:
             self.output_window.activateWindow()
             self.output_window.raise_()
 
     # ─── 휠 리사이즈 (Feature 4) ──────────────────────────
-    def wheelEvent(self, event):
+    def wheelEvent(self, event) -> None:
         """스크롤: ±1px / Shift+스크롤: ±10px  (중심 고정 리사이즈)"""
         shift = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
         step  = 10 if shift else 1
@@ -318,7 +317,7 @@ class SelectionOverlay(QWidget):
         self.region_changed.emit(self.geometry())
 
     # ─── 클릭 투과 (Feature 6) ───────────────────────────
-    def set_click_through(self, enabled: bool):
+    def set_click_through(self, enabled: bool) -> None:
         """출력창 클릭 투과 토글에 맞춰 선택 오버레이도 동기화."""
         self._click_through = enabled
         hwnd = int(self.winId())

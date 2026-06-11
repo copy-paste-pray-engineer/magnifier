@@ -2,11 +2,12 @@
 WinMagnifier — 컴포넌트 테스트
 실행: python test_capture.py
 """
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 
-def test_screen_capture():
+def test_screen_capture() -> None:
     print("=== 화면 캡처 테스트 ===")
     from capture.capture_engine import CaptureEngine
     engine = CaptureEngine("auto")
@@ -23,7 +24,7 @@ def test_screen_capture():
         print("  실패")
 
 
-def test_window_capture():
+def test_window_capture() -> None:
     print("\n=== 창 캡처 테스트 ===")
     import ctypes
     from capture.capture_engine import CaptureEngine
@@ -46,9 +47,10 @@ def test_window_capture():
             print("  실패 (창 캡처 불가)")
 
 
-def test_fps():
+def test_fps() -> None:
     print("\n=== FPS 테스트 (1초) ===")
-    import time, ctypes
+    import time
+    import ctypes
     from capture.capture_engine import CaptureEngine
     engine   = CaptureEngine("auto")
     hwnd     = ctypes.windll.user32.GetForegroundWindow()
@@ -68,7 +70,7 @@ if __name__ == "__main__":
         test_screen_capture()
         test_window_capture()
         test_fps()
-    except Exception as e:
+    except Exception:
         import traceback
         traceback.print_exc()
     print("\n완료")

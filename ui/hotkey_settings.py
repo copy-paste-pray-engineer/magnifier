@@ -48,25 +48,25 @@ class _KeyCaptureButton(QPushButton):
     """
     key_captured = Signal(int, int)  # win32 mods, vk
 
-    def __init__(self, label: str, parent=None):
+    def __init__(self, label: str, parent=None) -> None:
         super().__init__(label, parent)
         self._idle_label  = label
         self._capturing   = False
         self.setMinimumWidth(160)
         self.clicked.connect(self._start_capture)
 
-    def _start_capture(self):
+    def _start_capture(self) -> None:
         self._capturing = True
         self.setText("키 입력 중...  (ESC: 취소)")
         self.setStyleSheet(_CAPTURE_STYLE)
         self.setFocus()
 
-    def _stop_capture(self, label: Optional[str] = None):
+    def _stop_capture(self, label: Optional[str] = None) -> None:
         self._capturing = False
         self.setText(label or self._idle_label)
         self.setStyleSheet("")
 
-    def keyPressEvent(self, e):
+    def keyPressEvent(self, e) -> None:
         if not self._capturing:
             super().keyPressEvent(e)
             return
@@ -96,7 +96,7 @@ class _KeyCaptureButton(QPushButton):
 class HotkeySettingsDialog(QDialog):
     """트레이 아이콘 → '단축키 설정...' 에서 열리는 다이얼로그"""
 
-    def __init__(self, hotkey_mgr: "HotkeyManager", parent=None):
+    def __init__(self, hotkey_mgr: "HotkeyManager", parent=None) -> None:
         super().__init__(parent)
         self._mgr = hotkey_mgr
         self.setWindowTitle("전역 단축키 설정")
@@ -107,7 +107,7 @@ class HotkeySettingsDialog(QDialog):
         )
         self._build_ui()
 
-    def _build_ui(self):
+    def _build_ui(self) -> None:
         from utils.hotkeys import binding_to_label
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -156,7 +156,7 @@ class HotkeySettingsDialog(QDialog):
 
         self.adjustSize()
 
-    def _apply(self, action: str, mods: int, vk: int):
+    def _apply(self, action: str, mods: int, vk: int) -> None:
         from utils.hotkeys import binding_to_label
         ok = self._mgr.rebind(action, mods, vk)
         label = binding_to_label(mods, vk)

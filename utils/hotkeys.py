@@ -9,7 +9,10 @@
 from __future__ import annotations
 import ctypes
 import ctypes.wintypes
+import logging
 from typing import Dict, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import QObject, QAbstractNativeEventFilter, Signal
 
@@ -88,7 +91,7 @@ def qt_event_to_vkmods(qt_key: int, qt_mods) -> tuple[int, int]:
 class _HotkeyFilter(QAbstractNativeEventFilter):
     """QApplication 의 네이티브 이벤트 큐에서 WM_HOTKEY 를 가로챕니다."""
 
-    def __init__(self, manager: "HotkeyManager"):
+    def __init__(self, manager: "HotkeyManager") -> None:
         super().__init__()
         self._mgr = manager
 
@@ -116,7 +119,7 @@ class HotkeyManager(QObject):
     opacity_toggled       = Signal()
     clickthrough_toggled  = Signal()
 
-    def __init__(self, settings: "Settings", parent=None):
+    def __init__(self, settings: "Settings", parent=None) -> None:
         super().__init__(parent)
         self.settings    = settings
         self._registered: Dict[int, tuple[int, int]] = {}  # id → (mods, vk)
@@ -125,7 +128,7 @@ class HotkeyManager(QObject):
         self._filter = _HotkeyFilter(self)
         QApplication.instance().installNativeEventFilter(self._filter)
 
-    def load_and_register(self):
+    def load_and_register(self) -> None:
         """설정에서 바인딩을 읽어 등록합니다."""
         bindings = self.settings.get_hotkey_bindings()
         self._register(HOTKEY_OPACITY_ID,
@@ -156,7 +159,7 @@ class HotkeyManager(QObject):
                 self._register(hid, prev.get("mods", 0), prev.get("vk", 0))
         return ok
 
-    def close(self):
+    def close(self) -> None:
         """모든 단축키를 해제합니다. 앱 종료 전에 호출해야 합니다."""
         for hid in list(self._registered):
             self._unregister(hid)
@@ -176,19 +179,19 @@ class HotkeyManager(QObject):
         ))
         if ok:
             self._registered[hotkey_id] = (mods, vk)
-            print(f"[단축키] 등록됨  id={hotkey_id}  {binding_to_label(mods, vk)}")
+            logger.info(f"[단축키] 등록됨  id={hotkey_id}  {binding_to_label(mods, vk)}")
         else:
             err = ctypes.windll.kernel32.GetLastError()
-            print(f"[단축키] 등록 실패  id={hotkey_id}  {binding_to_label(mods, vk)}  "
+            logger.warning(f"[단축키] 등록 실패  id={hotkey_id}  {binding_to_label(mods, vk)}  "
                   f"(오류 {err} — 다른 앱이 이미 사용 중일 수 있습니다)")
         return ok
 
-    def _unregister(self, hotkey_id: int):
+    def _unregister(self, hotkey_id: int) -> None:
         if hotkey_id in self._registered:
             ctypes.windll.user32.UnregisterHotKey(None, hotkey_id)
             del self._registered[hotkey_id]
 
-    def _dispatch(self, hotkey_id: int):
+    def _dispatch(self, hotkey_id: int) -> None:
         if hotkey_id == HOTKEY_OPACITY_ID:
             self.opacity_toggled.emit()
         elif hotkey_id == HOTKEY_CLICKTHROUGH_ID:

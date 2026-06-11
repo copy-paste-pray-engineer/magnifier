@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 import ctypes
 import ctypes.wintypes
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 from PySide6.QtWidgets import QWidget, QMenu, QHBoxLayout, QLabel, QPushButton
@@ -27,7 +30,7 @@ class _PickerBanner(QWidget):
     from PySide6.QtCore import Signal as _Signal
     cancel_requested = _Signal()
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(None,
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -109,7 +112,7 @@ QMenu::separator {
 class CaptureThread(QThread):
     frame_ready = Signal(object)
 
-    def __init__(self, engine: CaptureEngine, config: MagnifierConfig):
+    def __init__(self, engine: CaptureEngine, config: MagnifierConfig) -> None:
         super().__init__()
         self._engine         = engine
         self._mutex          = QMutex()
@@ -121,16 +124,16 @@ class CaptureThread(QThread):
         self._h    = max(1, config.selection_h)
         self._hwnd = config.target_hwnd
 
-    def set_region(self, x, y, w, h, hwnd=0):
+    def set_region(self, x, y, w, h, hwnd=0) -> None:
         with QMutexLocker(self._mutex):
             self._x = x;  self._y = y
             self._w = max(1, w);  self._h = max(1, h)
             self._hwnd = hwnd
 
-    def set_fps(self, fps: int):
+    def set_fps(self, fps: int) -> None:
         self._frame_interval = 1.0 / max(1, min(240, fps))
 
-    def run(self):
+    def run(self) -> None:
         self._running = True
         last = time.perf_counter()
         while self._running:
@@ -153,7 +156,7 @@ class CaptureThread(QThread):
             except Exception:
                 pass
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         self.wait(2000)
 
@@ -212,7 +215,7 @@ class MagnifierWindow(QWidget):
 
     # ── 초기화 ───────────────────────────────────────────────
 
-    def _setup_window(self):
+    def _setup_window(self) -> None:
         flags = (Qt.WindowType.FramelessWindowHint
                  | Qt.WindowType.WindowStaysOnTopHint
                  | Qt.WindowType.Tool)
@@ -221,14 +224,14 @@ class MagnifierWindow(QWidget):
         self.setMouseTracking(True)
         self.setMinimumSize(MIN_W, MIN_H)
 
-    def _apply_config(self):
+    def _apply_config(self) -> None:
         self.setGeometry(self.config.output_x, self.config.output_y,
                          self.config.output_w, self.config.output_h)
         self.setWindowOpacity(self.config.opacity)
         if self.config.click_through:
             self._enable_click_through()
 
-    def _save_config(self):
+    def _save_config(self) -> None:
         g = self.geometry()
         self.config.output_x      = g.x()
         self.config.output_y      = g.y()
@@ -239,24 +242,24 @@ class MagnifierWindow(QWidget):
         self.config.show_hud      = self._show_hud
         self.config.dwm_mode      = self._dwm_mode
 
-    def set_selection_overlay(self, overlay: SelectionOverlay):
+    def set_selection_overlay(self, overlay: SelectionOverlay) -> None:
         self.selection_overlay = overlay
         overlay.region_changed.connect(self._on_region_changed)
         self._update_region(overlay.get_region())
 
     # ── 캡처 ─────────────────────────────────────────────────
 
-    def _on_region_changed(self, rect: QRect):
+    def _on_region_changed(self, rect: QRect) -> None:
         self._update_region(rect)
         if self._dwm_mode:
             self._update_dwm()
 
-    def _update_region(self, rect: QRect):
+    def _update_region(self, rect: QRect) -> None:
         self._cap.set_region(rect.x(), rect.y(),
                              rect.width(), rect.height(),
                              self.config.target_hwnd)
 
-    def _on_frame(self, frame: np.ndarray):
+    def _on_frame(self, frame: np.ndarray) -> None:
         if frame is None or frame.size == 0:
             return
         h, w, c = frame.shape
@@ -269,13 +272,13 @@ class MagnifierWindow(QWidget):
         self.update()
         self._fps_count += 1
 
-    def _tick_fps(self):
+    def _tick_fps(self) -> None:
         self._fps_display = self._fps_count
         self._fps_count   = 0
 
     # ── DWM 모드 ─────────────────────────────────────────────
 
-    def set_dwm_mode(self, enabled: bool):
+    def set_dwm_mode(self, enabled: bool) -> None:
         if enabled == self._dwm_mode:
             return
         self._dwm_mode = enabled
@@ -284,35 +287,36 @@ class MagnifierWindow(QWidget):
         else:
             self._stop_dwm()
 
-    def _start_dwm(self):
+    def _start_dwm(self) -> None:
         hwnd_src  = self.config.target_hwnd
         hwnd_dest = int(self.winId())
         if not hwnd_src:
-            print(f"[확대기 #{self.mag_id}] 대상 창이 지정되지 않아 DWM 모드를 켤 수 없습니다.")
+            logger.info(f"[확대기 #{self.mag_id}] 대상 창이 지정되지 않아 DWM 모드를 켤 수 없습니다.")
             self._dwm_mode = False
             return
         from ui.dwm_overlay import DWMOverlay
         self._dwm_overlay = DWMOverlay(hwnd_src, hwnd_dest)
         if not self._dwm_overlay.ok:
-            print(f"[확대기 #{self.mag_id}] DWM 썸네일 등록 실패 — 캡처 모드를 유지합니다.")
+            logger.warning(f"[확대기 #{self.mag_id}] DWM 썸네일 등록 실패 — 캡처 모드를 유지합니다.")
             self._dwm_overlay = None
             self._dwm_mode    = False
             return
         self._cap.set_fps(1)
         self._dwm_timer.start()
         self.update()
-        print(f"[확대기 #{self.mag_id}] DWM 모드 활성화")
+        logger.info(f"[확대기 #{self.mag_id}] DWM 모드 활성화")
 
-    def _stop_dwm(self):
+    def _stop_dwm(self) -> None:
         self._dwm_timer.stop()
         if self._dwm_overlay:
             self._dwm_overlay.close()
             self._dwm_overlay = None
-        self._cap.set_fps(60)
+        # 60 하드코딩 금지 — 사용자가 설정한 FPS 로 복원
+        self._cap.set_fps(self.config.fps)
         self.update()
-        print(f"[확대기 #{self.mag_id}] DWM 모드 해제")
+        logger.info("[확대기 #%d] DWM 모드 해제", self.mag_id)
 
-    def _update_dwm(self):
+    def _update_dwm(self) -> None:
         if not self._dwm_overlay or not self._dwm_mode:
             return
         sel      = self.selection_overlay
@@ -331,7 +335,7 @@ class MagnifierWindow(QWidget):
 
     # ── 그리기 ───────────────────────────────────────────────
 
-    def paintEvent(self, event):
+    def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         w, h = self.width(), self.height()
@@ -355,7 +359,7 @@ class MagnifierWindow(QWidget):
             QPoint(w, h - HANDLE), QPoint(w, h), QPoint(w - HANDLE, h)
         ])
 
-    def _draw_hud(self, p: QPainter, w: int, h: int):
+    def _draw_hud(self, p: QPainter, w: int, h: int) -> None:
         """좌상단 HUD: 확대기 번호, 배율, FPS, 캡처 방법"""
         method = _METHOD_SHORT.get(
             getattr(self.capture_engine, "_active", "auto"), "GDI"
@@ -387,12 +391,12 @@ class MagnifierWindow(QWidget):
 
     # ── HUD 토글 ─────────────────────────────────────────────
 
-    def toggle_hud(self):
+    def toggle_hud(self) -> None:
         self._show_hud       = not self._show_hud
         self.config.show_hud = self._show_hud
         self.update()
         state = "표시" if self._show_hud else "숨김"
-        print(f"[확대기 #{self.mag_id}] HUD {state}")
+        logger.info(f"[확대기 #{self.mag_id}] HUD {state}")
 
     # ── 리사이즈 방향 ────────────────────────────────────────
 
@@ -425,7 +429,7 @@ class MagnifierWindow(QWidget):
 
     # ── 마우스 ───────────────────────────────────────────────
 
-    def mousePressEvent(self, e: QMouseEvent):
+    def mousePressEvent(self, e: QMouseEvent) -> None:
         if self._click_through:
             return
         if e.button() == Qt.MouseButton.LeftButton:
@@ -438,7 +442,7 @@ class MagnifierWindow(QWidget):
         elif e.button() == Qt.MouseButton.RightButton:
             self._ctx_menu(e.globalPosition().toPoint())
 
-    def mouseMoveEvent(self, e: QMouseEvent):
+    def mouseMoveEvent(self, e: QMouseEvent) -> None:
         if self._click_through:
             return
         pos = e.position().toPoint()
@@ -450,11 +454,11 @@ class MagnifierWindow(QWidget):
         self._do_resize_move(delta)
         self._save_config()
 
-    def mouseReleaseEvent(self, e: QMouseEvent):
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
         self._drag_active = False
         self._save_config()
 
-    def _do_resize_move(self, delta: QPoint):
+    def _do_resize_move(self, delta: QPoint) -> None:
         dx, dy = delta.x(), delta.y()
         r = QRect(self._drag_origin, self._drag_size)
         d = self._resize_dir
@@ -475,7 +479,7 @@ class MagnifierWindow(QWidget):
             if nb - r.top() >= MIN_H:   r.setBottom(nb)
         self.setGeometry(r)
 
-    def wheelEvent(self, e):
+    def wheelEvent(self, e) -> None:
         if self._click_through:
             return
         shift = e.modifiers() & Qt.KeyboardModifier.ShiftModifier
@@ -491,7 +495,7 @@ class MagnifierWindow(QWidget):
 
     # ── 우클릭 메뉴 — 3개 항목만 ─────────────────────────────
 
-    def _ctx_menu(self, pos: QPoint):
+    def _ctx_menu(self, pos: QPoint) -> None:
         menu = QMenu(self)
         menu.setStyleSheet(_CTX_STYLE)
 
@@ -508,7 +512,7 @@ class MagnifierWindow(QWidget):
 
     # ── 설정 패널 ────────────────────────────────────────────
 
-    def _show_panel(self):
+    def _show_panel(self) -> None:
         if self._panel is None:
             from ui.control_panel import ControlPanel
             self._panel = ControlPanel(self)
@@ -520,7 +524,7 @@ class MagnifierWindow(QWidget):
 
     # ── 클릭 투과 ────────────────────────────────────────────
 
-    def toggle_click_through(self):
+    def toggle_click_through(self) -> None:
         if self._click_through:
             self._disable_click_through()
         else:
@@ -528,7 +532,7 @@ class MagnifierWindow(QWidget):
         self.config.click_through = self._click_through
         self.update()
 
-    def _enable_click_through(self):
+    def _enable_click_through(self) -> None:
         hwnd = int(self.winId())
         ex   = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         ctypes.windll.user32.SetWindowLongW(
@@ -538,9 +542,9 @@ class MagnifierWindow(QWidget):
         # Feature 6: 선택 오버레이에도 동기화
         if self.selection_overlay:
             self.selection_overlay.set_click_through(True)
-        print(f"[확대기 #{self.mag_id}] 클릭 투과 활성화")
+        logger.info(f"[확대기 #{self.mag_id}] 클릭 투과 활성화")
 
-    def _disable_click_through(self):
+    def _disable_click_through(self) -> None:
         hwnd = int(self.winId())
         ex   = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         ctypes.windll.user32.SetWindowLongW(
@@ -550,11 +554,11 @@ class MagnifierWindow(QWidget):
         # Feature 6: 선택 오버레이에도 동기화
         if self.selection_overlay:
             self.selection_overlay.set_click_through(False)
-        print(f"[확대기 #{self.mag_id}] 클릭 투과 해제")
+        logger.info(f"[확대기 #{self.mag_id}] 클릭 투과 해제")
 
     # ── 프리셋 저장 ──────────────────────────────────────────
 
-    def _save_preset_from_menu(self):
+    def _save_preset_from_menu(self) -> None:
         from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(self, "프리셋 저장", "프리셋 이름을 입력하세요:")
         if ok and name.strip():
@@ -562,7 +566,7 @@ class MagnifierWindow(QWidget):
 
     # ── 크기 직접 입력 ────────────────────────────────────────
 
-    def _size_input_dialog(self):
+    def _size_input_dialog(self) -> None:
         from PySide6.QtWidgets import (
             QDialog, QDialogButtonBox, QFormLayout,
             QSpinBox, QGroupBox, QVBoxLayout,
@@ -629,7 +633,7 @@ class MagnifierWindow(QWidget):
 
     # ── 대상 창 지정 ─────────────────────────────────────────
 
-    def _pick_target_window(self):
+    def _pick_target_window(self) -> None:
         """
         전체화면 Qt 오버레이 대신 WH_MOUSE_LL 저수준 마우스 훅을 설치한다.
         훅은 외부 프로세스의 클릭도 수신할 수 있으며, 클릭을 소비하지 않으므로
@@ -652,7 +656,7 @@ class MagnifierWindow(QWidget):
 
         self._install_pick_hook()
 
-    def _install_pick_hook(self):
+    def _install_pick_hook(self) -> None:
         """SetWindowsHookExW(WH_MOUSE_LL) 로 전역 마우스 클릭을 감지한다."""
         WH_MOUSE_LL    = 14
         WM_LBUTTONDOWN = 0x0201
@@ -705,15 +709,15 @@ class MagnifierWindow(QWidget):
         self._pick_hook = user32.SetWindowsHookExW(WH_MOUSE_LL, proc, None, 0)
         if not self._pick_hook:
             err = ctypes.windll.kernel32.GetLastError()
-            print(f"[확대기 #{self.mag_id}] WH_MOUSE_LL 훅 설치 실패 (오류 {err})")
+            logger.error(f"[확대기 #{self.mag_id}] WH_MOUSE_LL 훅 설치 실패 (오류 {err})")
             self._cleanup_pick()
 
-    def _finish_pick(self, hwnd: int):
+    def _finish_pick(self, hwnd: int) -> None:
         """훅이 클릭을 감지했을 때 호출 — 정리 후 창 등록."""
         self._cleanup_pick()
         self._on_window_picked(hwnd)
 
-    def _cancel_pick(self):
+    def _cancel_pick(self) -> None:
         """배너의 취소 버튼 또는 ESC 키로 중단."""
         if getattr(self, '_pick_hook', None):
             ctypes.windll.user32.UnhookWindowsHookEx(self._pick_hook)
@@ -721,13 +725,13 @@ class MagnifierWindow(QWidget):
             self._pick_hookproc = None
         self._cleanup_pick()
 
-    def _check_pick_esc(self):
+    def _check_pick_esc(self) -> None:
         """ESC 키 상태를 폴링하여 창 선택을 취소한다."""
         VK_ESCAPE = 0x1B
         if ctypes.windll.user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000:
             self._cancel_pick()
 
-    def _cleanup_pick(self):
+    def _cleanup_pick(self) -> None:
         """배너 위젯과 타이머를 안전하게 해제한다."""
         self._picking_active = False
         timer = getattr(self, '_esc_timer', None)
@@ -741,7 +745,7 @@ class MagnifierWindow(QWidget):
             banner.deleteLater()
             self._picker_banner = None
 
-    def _on_window_picked(self, hwnd: int):
+    def _on_window_picked(self, hwnd: int) -> None:
         if not hwnd:
             return
         # 자기 자신의 출력창이나 선택 오버레이는 무시
@@ -763,17 +767,17 @@ class MagnifierWindow(QWidget):
             self._start_dwm()
         if self.selection_overlay:
             self._update_region(self.selection_overlay.get_region())
-        print(f"[확대기 #{self.mag_id}] 대상 창 변경 → '{title}'")
+        logger.info(f"[확대기 #{self.mag_id}] 대상 창 변경 → '{title}'")
 
     # ── 리사이즈 / 닫기 ──────────────────────────────────────
 
-    def resizeEvent(self, e: QResizeEvent):
+    def resizeEvent(self, e: QResizeEvent) -> None:
         self._save_config()
         if self._dwm_mode:
             self._update_dwm()
         super().resizeEvent(e)
 
-    def closeEvent(self, e):
+    def closeEvent(self, e) -> None:
         # 창 선택 도중 닫힐 경우 훅과 배너를 정리
         if getattr(self, '_picking_active', False):
             self._cancel_pick()

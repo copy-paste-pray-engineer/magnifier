@@ -1,8 +1,12 @@
 """
 설정 저장/로드
 """
-import json, os
+import json
+import logging
+import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any, Optional
 
@@ -36,7 +40,6 @@ _DEFAULT_HOTKEYS: Dict[str, Any] = {
 @dataclass
 class AppSettings:
     capture_method: str = "auto"  # auto(=printwindow), printwindow, wgc, bitblt
-    magnifiers: List[Dict[str, Any]] = field(default_factory=list)
     presets: List[Dict[str, Any]] = field(default_factory=list)
     preset_groups: List[Dict[str, Any]] = field(default_factory=list)
     hotkeys: Dict[str, Any] = field(
@@ -48,45 +51,30 @@ class Settings:
     CONFIG_DIR  = Path(os.getenv("APPDATA", ".")) / "WinMagnifier"
     CONFIG_FILE = CONFIG_DIR / "settings.json"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.app = AppSettings()
         self.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    def load(self):
+    def load(self) -> None:
         if not self.CONFIG_FILE.exists():
             return
         try:
             with open(self.CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self.app.capture_method = data.get("capture_method", self.app.capture_method)
-            self.app.magnifiers     = data.get("magnifiers", [])
             self.app.presets        = data.get("presets", [])
             self.app.preset_groups  = data.get("preset_groups", [])
             self.app.hotkeys.update(data.get("hotkeys", {}))
-        except Exception as e:
-            print(f"설정 로드 실패: {e}")
+        except Exception:
+            logger.exception("설정 로드 실패")
 
-    def save(self):
+    def save(self) -> None:
         try:
             data = asdict(self.app)
             with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"설정 저장 실패: {e}")
-
-    def save_magnifier_configs(self, configs: list):
-        self.app.magnifiers = [asdict(c) for c in configs]
-        self.save()
-
-    def get_magnifier_configs(self) -> List[MagnifierConfig]:
-        result = []
-        for d in self.app.magnifiers:
-            cfg = MagnifierConfig()
-            for k, v in d.items():
-                if hasattr(cfg, k) and k != "target_hwnd":
-                    setattr(cfg, k, v)
-            result.append(cfg)
-        return result
+        except Exception:
+            logger.exception("설정 저장 실패")
 
     # ── 단축키 ──────────────────────────────────────────────
 
@@ -95,13 +83,13 @@ class Settings:
         result.update(self.app.hotkeys)
         return result
 
-    def set_hotkey_binding(self, action: str, mods: int, vk: int):
+    def set_hotkey_binding(self, action: str, mods: int, vk: int) -> None:
         self.app.hotkeys[action] = {"mods": mods, "vk": vk}
         self.save()
 
     # ── 프리셋 ──────────────────────────────────────────────
 
-    def save_preset(self, name: str, config: MagnifierConfig, process_name: str):
+    def save_preset(self, name: str, config: MagnifierConfig, process_name: str) -> None:
         preset = {
             "name":           name,
             "target_process": process_name,
@@ -132,7 +120,7 @@ class Settings:
                 return p
         return None
 
-    def delete_preset(self, name: str):
+    def delete_preset(self, name: str) -> None:
         self.app.presets = [p for p in self.app.presets if p.get("name") != name]
         self.save()
 
@@ -148,7 +136,7 @@ class Settings:
     # ── 프리셋 그룹 ─────────────────────────────────────────
     # 그룹은 프리셋 데이터를 복사하지 않고 이름만 참조한다.
 
-    def save_preset_group(self, name: str, preset_names: List[str]):
+    def save_preset_group(self, name: str, preset_names: List[str]) -> None:
         group = {"name": name, "presets": list(preset_names)}
         self.app.preset_groups = [g for g in self.app.preset_groups
                                   if g.get("name") != name]
@@ -158,7 +146,7 @@ class Settings:
     def get_preset_groups(self) -> List[Dict[str, Any]]:
         return list(self.app.preset_groups)
 
-    def delete_preset_group(self, name: str):
+    def delete_preset_group(self, name: str) -> None:
         self.app.preset_groups = [g for g in self.app.preset_groups
                                   if g.get("name") != name]
         self.save()

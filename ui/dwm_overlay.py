@@ -10,7 +10,10 @@ DwmRegisterThumbnail → DwmUpdateThumbnailProperties 루프로
 from __future__ import annotations
 import ctypes
 import ctypes.wintypes as wintypes
+import logging
 from typing import Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # ── dwmapi 구조체 ──────────────────────────────────────────────
 
@@ -47,7 +50,7 @@ class DWMOverlay:
         overlay.close()
     """
 
-    def __init__(self, hwnd_src: int, hwnd_dest: int):
+    def __init__(self, hwnd_src: int, hwnd_dest: int) -> None:
         self.hwnd_src  = hwnd_src
         self.hwnd_dest = hwnd_dest
         self._thumb    = ctypes.c_void_p(0)
@@ -56,7 +59,7 @@ class DWMOverlay:
         self._visible  = False
         self._register()
 
-    def _register(self):
+    def _register(self) -> None:
         """DwmRegisterThumbnail 호출"""
         if not self.hwnd_src or not self.hwnd_dest:
             return
@@ -68,11 +71,11 @@ class DWMOverlay:
             )
             self._ok = (hr == 0 and bool(self._thumb))
             if self._ok:
-                print(f"[DWM] 등록 성공: src={self.hwnd_src:#x} → dst={self.hwnd_dest:#x}")
+                logger.info(f"[DWM] 등록 성공: src={self.hwnd_src:#x} → dst={self.hwnd_dest:#x}")
             else:
-                print(f"[DWM] DwmRegisterThumbnail 실패: hr={hr:#010x}")
-        except Exception as e:
-            print(f"[DWM] 등록 예외: {e}")
+                logger.error(f"[DWM] DwmRegisterThumbnail 실패: hr={hr:#010x}")
+        except Exception:
+            logger.exception("[DWM] 등록 예외")
 
     def update(
         self,
@@ -132,7 +135,7 @@ class DWMOverlay:
         except Exception:
             return False
 
-    def hide(self):
+    def hide(self) -> None:
         """썸네일 숨기기"""
         if not self._ok:
             return
@@ -167,7 +170,7 @@ class DWMOverlay:
     def visible(self) -> bool:
         return self._visible
 
-    def close(self):
+    def close(self) -> None:
         """DwmUnregisterThumbnail"""
         if self._ok and self._thumb:
             try:
@@ -178,7 +181,7 @@ class DWMOverlay:
         self._visible = False
         self._thumb   = ctypes.c_void_p(0)
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.close()
 
 

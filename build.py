@@ -2,13 +2,16 @@
 WinMagnifier PyInstaller 빌드 스크립트
 실행: python build.py [--onefile] [--debug]
 """
-import subprocess, sys, os, shutil, argparse
+import subprocess
+import sys
+import shutil
+import argparse
 from pathlib import Path
 
 HERE = Path(__file__).parent
 
 
-def clean():
+def clean() -> None:
     for d in ["dist", "build"]:
         p = HERE / d
         if p.exists():
@@ -20,7 +23,7 @@ def clean():
         f.unlink()
 
 
-def make_runtime_hook():
+def make_runtime_hook() -> None:
     hook = HERE / "runtime_hook.py"
     hook.write_text(
         "import sys, os\n"
@@ -32,7 +35,7 @@ def make_runtime_hook():
     )
 
 
-def make_version_info():
+def make_version_info() -> None:
     vi = HERE / "version_info.txt"
     vi.write_text(
         "VSVersionInfo(\n"
@@ -53,7 +56,7 @@ def make_version_info():
     )
 
 
-def build(onefile=False, debug=False):
+def build(onefile=False, debug=False) -> None:
     print("=" * 48)
     print("  WinMagnifier v2.2 빌드 시작")
     print("=" * 48)
@@ -74,17 +77,14 @@ def build(onefile=False, debug=False):
         "--hidden-import=PySide6.QtGui",
         "--hidden-import=PySide6.QtWidgets",
         "--hidden-import=numpy",
-        # winrt 네임스페이스 패키지는 함수 안에서 늦게 import 되므로
-        # PyInstaller 의 정적 분석으로는 안 잡힌다. 서브모듈/데이터/네이티브
-        # .pyd 를 통째로 끌고 와야 패키징된 exe 에서도 WGC 가 동작한다.
-        "--collect-all=winrt",
+        # WGC 는 순수 ctypes COM 구현이라 winrt 패키지가 필요 없다.
         "--exclude-module=matplotlib",
         "--exclude-module=scipy",
         "--exclude-module=pandas",
         "--exclude-module=tkinter",
         "--exclude-module=unittest",
         "--runtime-hook=runtime_hook.py",
-        f"--version-file=version_info.txt",
+        "--version-file=version_info.txt",
     ]
 
     if ico.exists():
