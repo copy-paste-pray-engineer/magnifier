@@ -1,0 +1,22 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# 기본 규칙(E4/E7/E9/F)에 더해 자주 잡히는 실수 계열만 추가.
+extend-select = ["B"]
+# E402: main.py 가 Qt import 전에 환경 변수·sys.path 를 설정해야 하므로
+#       모듈 중간 import 가 의도적이다.
+# E701/E702: `if x: y`·`a = 1; b = 2` 한 줄 스타일은 이 프로젝트의 기존 관례.
+ignore = ["E402", "E701", "E702"]
+
+[tool.pytest.ini_options]
+# test_capture.py (루트) 는 화면 캡처가 필요한 수동 스크립트 — 자동 수집 제외.
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true
+exclude = ["\\.venv", "build", "dist"]

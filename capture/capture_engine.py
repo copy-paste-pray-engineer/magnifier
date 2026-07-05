@@ -2,9 +2,12 @@
 CaptureEngine — 통합 캡처 엔진
 
 지원 방법:
-  auto  → WGC(winrt 설치 시) > BitBlt(기본 fallback)
-  wgc   → Windows Graphics Capture API  (GPU, 비활성 창 완벽 지원)
-  bitblt→ GDI BitBlt  (화면에 보이는 영역, 추가 설치 불필요)
+  auto        → printwindow 와 동일 (기본값)
+  printwindow → PrintWindow(PW_RENDERFULLCONTENT). DWM 합성 프레임 복사.
+                DX/GPU 창·비활성 창 지원, 노란 테두리 없음, 추가 설치 불필요.
+  wgc         → Windows Graphics Capture (순수 ctypes COM, GPU 가속).
+                실패 시 printwindow 로 폴백.
+  bitblt      → GDI BitBlt. 항상 동작하지만 DX 창은 검은 화면.
 
 사용하지 않는 방법:
   PrintWindow — DX 전용 창에서 검은 화면이 자주 발생하고
@@ -20,9 +23,17 @@ DWM 썸네일:
 """
 import ctypes
 import ctypes.wintypes as wintypes
+import logging
+import time
 from ctypes import windll, byref, c_int, c_void_p
 from typing import Optional, Tuple, Dict
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# WGC 세션 생성 실패 후 재시도까지 대기 시간 (초).
+# 창 최소화 등 일시적 실패가 영구 차단되지 않도록 한다.
+_WGC_RETRY_SEC = 5.0
 
 SRCCOPY    = 0x00CC0020
 CAPTUREBLT = 0x40000000
@@ -55,7 +66,7 @@ class RECT(ctypes.Structure):
 class _GDI:
     """BitBlt 기반 화면 캡처 (내부용)"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.u = windll.user32
         self.g = windll.gdi32
 
@@ -144,7 +155,7 @@ class _GDI:
         x2, y2 = min(fw, cx + rw), min(fh, cy + rh)
         return full[y1:y2, x1:x2] if x2 > x1 and y2 > y1 else None
 
-    def _read(self, hdc_mem, hbmp, w, h) -> Optional[np.ndarray]:
+    def _read(self, hdc_mem: int, hbmp: int, w: int, h: int) -> Optional[np.ndarray]:
         bmi = BITMAPINFO()
         bmi.bmiHeader.biSize        = ctypes.sizeof(BITMAPINFOHEADER)
         bmi.bmiHeader.biWidth       = w
@@ -171,36 +182,38 @@ def _check_wgc() -> bool:
 class CaptureEngine:
     """
     캡처 방법:
-      auto   — WGC 가능하면 WGC, 아니면 BitBlt
-      wgc    — Windows Graphics Capture (winrt 패키지 필요)
-      bitblt — GDI BitBlt  (추가 설치 불필요, 항상 동작)
+      auto        — printwindow 와 동일 (기본값)
+      printwindow — PrintWindow(PW_RENDERFULLCONTENT), DX 창·비활성 창 지원
+      wgc         — Windows Graphics Capture (순수 ctypes, 실패 시 PW 폴백)
+      bitblt      — GDI BitBlt (항상 동작, DX 창 미지원)
+
+    캡처 방법은 엔진 전역 설정이다 — 모든 확대기가 공유한다.
     """
 
-    def __init__(self, method: str = "auto"):
+    def __init__(self, method: str = "auto") -> None:
         self.method = method
         self._gdi   = _GDI()
         self._wgc_sessions: Dict[int, object] = {}
         self._wgc_refcount: Dict[int, int]    = {}
+        self._wgc_failed_at: Dict[int, float] = {}  # hwnd → 실패 시각 (재시도 판단)
 
-        if method == "auto":
-            # PrintWindow + PW_RENDERFULLCONTENT 를 기본으로 사용.
-            # WGC 와 달리 캡처 표시자(노란 테두리)가 없고 DX/GPU 창도 지원.
-            self._active = "printwindow"
-        elif method in ("wgc", "printwindow", "bitblt"):
+        if method in ("wgc", "printwindow", "bitblt"):
             self._active = method
         else:
+            # auto: PrintWindow + PW_RENDERFULLCONTENT 기본.
+            # WGC 와 달리 캡처 표시자(노란 테두리)가 없고 DX/GPU 창도 지원.
             self._active = "printwindow"
 
-        print(f"캡처 방법: {self._active.upper()}")
+        logger.info("캡처 방법: %s", self._active.upper())
 
     # ── WGC 세션 라이프사이클 ────────────────────────────────────
-    def acquire_wgc(self, hwnd: int):
+    def acquire_wgc(self, hwnd: int) -> None:
         """확대기가 hwnd 를 사용하기 시작할 때 호출 — 참조 카운트 +1."""
         if not hwnd:
             return
         self._wgc_refcount[hwnd] = self._wgc_refcount.get(hwnd, 0) + 1
 
-    def release_wgc(self, hwnd: int):
+    def release_wgc(self, hwnd: int) -> None:
         """확대기가 hwnd 사용을 끝낼 때 호출 — 0 되면 세션 종료."""
         if not hwnd:
             return
@@ -250,18 +263,23 @@ class CaptureEngine:
 
     # ── WGC 내부 ────────────────────────────────────────────────
 
-    def _capture_wgc(self, hwnd, rx, ry, rw, rh) -> Optional[np.ndarray]:
+    def _capture_wgc(self, hwnd: int, rx: int, ry: int,
+                     rw: int, rh: int) -> Optional[np.ndarray]:
         try:
             from capture.wgc_capture import WGCSession
             if hwnd not in self._wgc_sessions:
+                # 최근 실패한 hwnd 는 일정 시간 후에만 재시도.
+                # 창 최소화 등 일시적 원인일 수 있어 영구 차단하지 않는다.
+                failed = self._wgc_failed_at.get(hwnd)
+                if failed is not None and time.monotonic() - failed < _WGC_RETRY_SEC:
+                    return None
                 sess = WGCSession(hwnd)
                 if not sess.ok:
-                    self._wgc_sessions[hwnd] = None  # 실패 캐시 — 재시도 방지
+                    self._wgc_failed_at[hwnd] = time.monotonic()
                     return None
+                self._wgc_failed_at.pop(hwnd, None)
                 self._wgc_sessions[hwnd] = sess
             sess = self._wgc_sessions[hwnd]
-            if sess is None:  # 이전에 실패한 hwnd
-                return None
             frame = sess.get_latest_frame()
             if frame is None:
                 return None
@@ -272,8 +290,8 @@ class CaptureEngine:
             x1, y1 = max(0, cx), max(0, cy)
             x2, y2 = min(fw, cx + rw), min(fh, cy + rh)
             return frame[y1:y2, x1:x2] if x2 > x1 and y2 > y1 else None
-        except Exception as e:
-            print(f"WGC 캡처 오류: {e}")
+        except Exception:
+            logger.exception("WGC 캡처 오류")
             return None
 
     # ── 유틸 ────────────────────────────────────────────────────
@@ -336,15 +354,17 @@ class CaptureEngine:
         windll.user32.EnumWindows(_cb, 0)
         return found[0] if found else 0
 
-    def release_wgc_session(self, hwnd: int):
+    def release_wgc_session(self, hwnd: int) -> None:
+        self._wgc_failed_at.pop(hwnd, None)
         sess = self._wgc_sessions.pop(hwnd, None)
         if sess:
             try: sess.close()
             except Exception: pass
 
-    def close(self):
+    def close(self) -> None:
         for sess in self._wgc_sessions.values():
             try: sess.close()
             except Exception: pass
         self._wgc_sessions.clear()
         self._wgc_refcount.clear()
+        self._wgc_failed_at.clear()

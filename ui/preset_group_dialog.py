@@ -40,7 +40,7 @@ QPushButton:pressed { background: #d43030; color: white; }
 class PresetGroupDialog(QDialog):
     """트레이 → '프리셋 그룹' → '그룹 만들기...' 에서 열리는 다이얼로그."""
 
-    def __init__(self, presets: List[Dict[str, Any]], parent=None):
+    def __init__(self, presets: List[Dict[str, Any]], parent=None) -> None:
         super().__init__(parent)
         self._checks: List[Tuple[QCheckBox, str]] = []
         self.setWindowTitle("프리셋 그룹 만들기")
@@ -50,7 +50,7 @@ class PresetGroupDialog(QDialog):
         )
         self._build_ui(presets)
 
-    def _build_ui(self, presets: List[Dict[str, Any]]):
+    def _build_ui(self, presets: List[Dict[str, Any]]) -> None:
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
 
@@ -96,7 +96,7 @@ class PresetGroupDialog(QDialog):
         names = [pname for chk, pname in self._checks if chk.isChecked()]
         return name, names
 
-    def _on_accept(self):
+    def _on_accept(self) -> None:
         name, names = self.selected()
         if not name:
             QMessageBox.warning(self, "그룹 만들기", "그룹 이름을 입력하세요.")

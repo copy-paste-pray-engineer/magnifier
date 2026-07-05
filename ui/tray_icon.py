@@ -3,8 +3,11 @@
 - 더블클릭: 새 확대기
 - 우클릭 메뉴: 새 확대기 / 확대기 목록 / 종료
 """
+import logging
 from pathlib import Path
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QInputDialog, QMessageBox
+
+logger = logging.getLogger(__name__)
 from PySide6.QtGui     import QIcon, QPixmap, QPainter, QColor, QPen
 from PySide6.QtCore    import Qt
 
@@ -51,7 +54,7 @@ def _fallback_icon() -> QIcon:
 
 class SystemTrayIcon(QSystemTrayIcon):
 
-    def __init__(self, mgr, settings, hotkey_mgr=None, parent=None):
+    def __init__(self, mgr, settings, hotkey_mgr=None, parent=None) -> None:
         super().__init__(parent)
         self.mgr          = mgr
         self.settings     = settings
@@ -69,7 +72,7 @@ class SystemTrayIcon(QSystemTrayIcon):
 
     # ── 메뉴 구성 ────────────────────────────────────────────
 
-    def _build_menu(self):
+    def _build_menu(self) -> None:
         m = QMenu()
         m.setStyleSheet(_MENU_STYLE)
 
@@ -100,7 +103,7 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         self.setContextMenu(m)
 
-    def _fill_list_menu(self):
+    def _fill_list_menu(self) -> None:
         self._list_menu.clear()
         ids = self.mgr.magnifier_ids
         if not ids:
@@ -125,7 +128,7 @@ class SystemTrayIcon(QSystemTrayIcon):
                 lambda _=False, m=mid: self.mgr.destroy_magnifier(m)
             )
 
-    def _fill_preset_menu(self):
+    def _fill_preset_menu(self) -> None:
         self._preset_menu.clear()
         presets = self.settings.get_presets()
         if not presets:
@@ -143,7 +146,7 @@ class SystemTrayIcon(QSystemTrayIcon):
                 self._delete_preset_dialog
             )
 
-    def _fill_group_menu(self):
+    def _fill_group_menu(self) -> None:
         self._group_menu.clear()
         groups = self.settings.get_preset_groups()
         if not groups:
@@ -165,31 +168,31 @@ class SystemTrayIcon(QSystemTrayIcon):
         del_act.triggered.connect(self._delete_group_dialog)
         del_act.setEnabled(bool(groups))
 
-    def _rebuild_menu(self, *_):
+    def _rebuild_menu(self, *_) -> None:
         self._fill_list_menu()
 
     # ── 동작 ─────────────────────────────────────────────────
 
-    def _on_activate(self, reason):
+    def _on_activate(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._new()
 
-    def _new(self):
+    def _new(self) -> None:
         self.mgr.create_magnifier(target_hwnd=0)
 
-    def _open_panel(self, mid: int):
+    def _open_panel(self, mid: int) -> None:
         pair = self.mgr._magnifiers.get(mid)
         if pair:
             pair.output._show_panel()
 
-    def _toggle_ct(self, mid: int):
+    def _toggle_ct(self, mid: int) -> None:
         pair = self.mgr._magnifiers.get(mid)
         if pair:
             pair.output.toggle_click_through()
 
     # ── 프리셋 ─────────────────────────────────────────────────
 
-    def _save_preset(self, mid: int):
+    def _save_preset(self, mid: int) -> None:
         pair = self.mgr._magnifiers.get(mid)
         if not pair:
             return
@@ -202,9 +205,9 @@ class SystemTrayIcon(QSystemTrayIcon):
         config       = pair.config
         process_name = self.mgr.capture_engine.get_process_name(config.target_hwnd)
         self.settings.save_preset(name, config, process_name)
-        print(f"프리셋 '{name}' 저장됨  (프로세스: {process_name or '없음'})")
+        logger.info(f"프리셋 '{name}' 저장됨  (프로세스: {process_name or '없음'})")
 
-    def _load_preset(self, preset: dict):
+    def _load_preset(self, preset: dict) -> None:
         cfg              = self.settings.preset_to_config(preset)
         cfg.preset_name  = preset.get("name", "")       # 트레이 목록에 이름 표시
         process_name     = preset.get("target_process", "")
@@ -213,12 +216,12 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.mgr.create_magnifier(target_hwnd=hwnd, config=cfg)
         if hwnd:
             title = self.mgr.capture_engine.get_window_title(hwnd)
-            print(f"프리셋 '{preset.get('name')}' 불러옴  (창: '{title}')")
+            logger.info(f"프리셋 '{preset.get('name')}' 불러옴  (창: '{title}')")
         else:
-            print(f"프리셋 '{preset.get('name')}' 불러옴  "
+            logger.info(f"프리셋 '{preset.get('name')}' 불러옴  "
                   f"(프로세스 '{process_name}' 미실행 — 대상 창 없음)")
 
-    def _show_hotkey_settings(self):
+    def _show_hotkey_settings(self) -> None:
         if self._hotkey_mgr is None:
             QMessageBox.information(None, "단축키", "단축키 관리자가 초기화되지 않았습니다.")
             return
@@ -226,7 +229,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         dlg = HotkeySettingsDialog(self._hotkey_mgr)
         dlg.exec()
 
-    def _delete_preset_dialog(self):
+    def _delete_preset_dialog(self) -> None:
         presets = self.settings.get_presets()
         if not presets:
             QMessageBox.information(None, "프리셋 삭제", "저장된 프리셋이 없습니다.")
@@ -237,11 +240,11 @@ class SystemTrayIcon(QSystemTrayIcon):
         )
         if ok and name:
             self.settings.delete_preset(name)
-            print(f"프리셋 '{name}' 삭제됨")
+            logger.info(f"프리셋 '{name}' 삭제됨")
 
     # ── 프리셋 그룹 ─────────────────────────────────────────────
 
-    def _load_preset_group(self, group: dict):
+    def _load_preset_group(self, group: dict) -> None:
         loaded  = 0
         missing = []
         for name in group.get("presets", []):
@@ -251,11 +254,11 @@ class SystemTrayIcon(QSystemTrayIcon):
                 continue
             self._load_preset(preset)
             loaded += 1
-        print(f"그룹 '{group.get('name')}' 불러옴  (확대기 {loaded}개 생성)")
+        logger.info(f"그룹 '{group.get('name')}' 불러옴  (확대기 {loaded}개 생성)")
         if missing:
-            print(f"  누락된 프리셋 건너뜀: {', '.join(missing)}")
+            logger.info(f"  누락된 프리셋 건너뜀: {', '.join(missing)}")
 
-    def _create_group_dialog(self):
+    def _create_group_dialog(self) -> None:
         presets = self.settings.get_presets()
         if not presets:
             QMessageBox.information(
@@ -267,9 +270,9 @@ class SystemTrayIcon(QSystemTrayIcon):
         if dlg.exec():
             name, preset_names = dlg.selected()
             self.settings.save_preset_group(name, preset_names)
-            print(f"그룹 '{name}' 저장됨  (프리셋 {len(preset_names)}개)")
+            logger.info(f"그룹 '{name}' 저장됨  (프리셋 {len(preset_names)}개)")
 
-    def _delete_group_dialog(self):
+    def _delete_group_dialog(self) -> None:
         groups = self.settings.get_preset_groups()
         if not groups:
             QMessageBox.information(None, "그룹 삭제", "저장된 그룹이 없습니다.")
@@ -280,10 +283,9 @@ class SystemTrayIcon(QSystemTrayIcon):
         )
         if ok and name:
             self.settings.delete_preset_group(name)
-            print(f"그룹 '{name}' 삭제됨")
+            logger.info(f"그룹 '{name}' 삭제됨")
 
-    def _quit(self):
-        self.settings.save_magnifier_configs(self.mgr.get_configs())
+    def _quit(self) -> None:
         self.mgr.destroy_all()
         # 캡처 엔진의 모든 WGC 세션(D3D11 디바이스 포함) 해제
         try:

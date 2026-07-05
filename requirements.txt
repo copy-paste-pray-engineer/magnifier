@@ -1,26 +1,13 @@
 # WinMagnifier 필수 패키지
 PySide6>=6.6.0
-pywin32>=306
 numpy>=1.26.0
-Pillow>=10.0.0
 
-# 선택: 고성능 WGC (고성능 모드에서 사용)
-# 직접 사용 패키지
-winrt-runtime
-winrt-Windows.Graphics.Capture
-winrt-Windows.Graphics.DirectX
-winrt-Windows.Graphics.DirectX.Direct3D11
-winrt-Windows.Graphics.Imaging       # SoftwareBitmap 폴백 경로 (vtable 언랩 실패 시)
-# 위 패키지들이 top-level 에서 import 하는 의존 winrt 네임스페이스.
-# pip 가 자동 설치해 주지 않으므로 명시 — 안 깔리면 PyInstaller 가
-# "missing module" 경고를 내고 패키징된 exe 가 런타임에 실패한다.
-winrt-Windows.Foundation
-winrt-Windows.Foundation.Collections
-winrt-Windows.Storage
-winrt-Windows.Storage.Streams
-winrt-Windows.UI
-winrt-Windows.System
-winrt-Windows.Security.Authorization.AppCapabilityAccess
+# WGC 는 순수 ctypes COM 구현 — winrt/pywin32 패키지 불필요.
 
-# 빌드용
+# 선택: test_capture.py 에서 캡처 결과를 PNG 로 저장할 때만 사용
+# Pillow>=10.0.0
+
+# 개발·빌드용
+pytest>=8.0.0
+ruff>=0.4.0
 pyinstaller>=6.0.0

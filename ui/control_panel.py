@@ -4,11 +4,15 @@
 패널을 닫아도 확대기는 계속 동작합니다.
 """
 from __future__ import annotations
+import ctypes
+import logging
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
-    QPushButton, QGroupBox, QCheckBox, QFrame, QButtonGroup,
+    QPushButton, QGroupBox, QCheckBox, QFrame,
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui  import QPainter, QColor
@@ -111,7 +115,7 @@ _METHOD_SHORT = {"auto": "AUTO", "wgc": "WGC", "bitblt": "GDI", "printwindow": "
 
 
 class _Sep(QFrame):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.HLine)
         self.setStyleSheet(f"color: {_LINE};")
@@ -122,7 +126,7 @@ class ControlPanel(QWidget):
 
     close_requested = Signal()
 
-    def __init__(self, mag_window: "MagnifierWindow", parent=None):
+    def __init__(self, mag_window: "MagnifierWindow", parent=None) -> None:
         super().__init__(
             parent,
             Qt.WindowType.Tool
@@ -151,7 +155,7 @@ class ControlPanel(QWidget):
 
     # ── UI 구성 ──────────────────────────────────────────────
 
-    def _build_ui(self):
+    def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 10)
         root.setSpacing(5)
@@ -236,7 +240,8 @@ class ControlPanel(QWidget):
         self._btn_high.setToolTip(
             "고성능 모드 (PrintWindow / DWM)\n\n"
             "DX·OpenGL 창, 비활성/가려진 창, 게임 화면 캡처.\n"
-            "노란 테두리 없음. 추가 설치 불필요."
+            "노란 테두리 없음. 추가 설치 불필요.\n\n"
+            "※ 캡처 방법은 모든 확대기에 공통 적용됩니다."
         )
 
         self._btn_low = QPushButton("저사양")
@@ -285,7 +290,7 @@ class ControlPanel(QWidget):
         root.addWidget(self._del_btn)
         self.adjustSize()
 
-    def _wire(self):
+    def _wire(self) -> None:
         self._op_sl.valueChanged.connect(self._on_opacity)
         self._fps_sl.valueChanged.connect(self._on_fps)
         self._btn_high.clicked.connect(self._on_high_perf)
@@ -296,7 +301,7 @@ class ControlPanel(QWidget):
         self._pick_btn.clicked.connect(self.w._pick_target_window)
         self._del_btn.clicked.connect(self.close_requested.emit)
 
-    def _sync_from_window(self):
+    def _sync_from_window(self) -> None:
         w  = self.w
         op = int(w.windowOpacity() * 100)
         self._op_sl.blockSignals(True)
@@ -319,23 +324,23 @@ class ControlPanel(QWidget):
 
     # ── 캡처 방법 버튼 ───────────────────────────────────────
 
-    def _on_high_perf(self):
+    def _on_high_perf(self) -> None:
         """고성능(PrintWindow) — DWM 모드 끄고 PrintWindow 캡처 활성화"""
         if self.w._dwm_mode:
             self.w.set_dwm_mode(False)
         self.w.capture_engine._active = "printwindow"
         self._update_cap_buttons()
-        print(f"[확대기 #{self.mag_id}] 고성능 모드 (PrintWindow)")
+        logger.info("[확대기 #%d] 고성능 모드 (PrintWindow)", self.mag_id)
 
-    def _on_low_spec(self):
+    def _on_low_spec(self) -> None:
         """저사양(DWM) — DWM 썸네일 모드 활성화"""
         if not self.w._dwm_mode:
             self.w.set_dwm_mode(True)
         self._update_cap_buttons()
-        print(f"[확대기 #{self.mag_id}] 저사양 모드 (DWM)")
+        logger.info("[확대기 #%d] 저사양 모드 (DWM)", self.mag_id)
 
 
-    def _update_cap_buttons(self):
+    def _update_cap_buttons(self) -> None:
         """현재 모드에 따라 버튼 외관 및 상태 텍스트 업데이트"""
         w = self.w
         if w._dwm_mode:
@@ -358,26 +363,26 @@ class ControlPanel(QWidget):
                 )
     # ── 슬롯 ─────────────────────────────────────────────────
 
-    def _on_opacity(self, v: int):
+    def _on_opacity(self, v: int) -> None:
         self._op_v.setText(f"{v}%")
         self.w.setWindowOpacity(v / 100.0)
         self.w.config.opacity = v / 100.0
 
-    def _on_fps(self, v: int):
+    def _on_fps(self, v: int) -> None:
         self._fps_v.setText(str(v))
         self.w.config.fps = v
         if not self.w._dwm_mode:
             self.w._cap.set_fps(v)
 
-    def _on_hud(self, checked: bool):
+    def _on_hud(self, checked: bool) -> None:
         if self.w._show_hud != checked:
             self.w.toggle_hud()
 
-    def _on_ct(self):
+    def _on_ct(self) -> None:
         self.w.toggle_click_through()
         self._update_ct_btn()
 
-    def _update_ct_btn(self):
+    def _update_ct_btn(self) -> None:
         if self.w._click_through:
             self._ct_btn.setText("클릭 투과 끄기   [현재: 켜짐]")
             self._ct_btn.setStyleSheet(
@@ -388,18 +393,26 @@ class ControlPanel(QWidget):
             self._ct_btn.setText("클릭 투과 켜기")
             self._ct_btn.setStyleSheet("")
 
-    def _on_topmost(self, checked: bool):
-        flags = self.w.windowFlags()
-        if checked:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        else:
-            flags &= ~Qt.WindowType.WindowStaysOnTopHint
-        self.w.setWindowFlags(flags)
-        self.w.show()
+    def _on_topmost(self, checked: bool) -> None:
+        # setWindowFlags() 는 네이티브 창을 재생성해 winId 가 바뀐다.
+        # 그러면 SetWindowLongW 로 적용한 클릭 투과 스타일이 사라지고
+        # DWM 썸네일이 죽은 hwnd 를 가리키게 된다.
+        # z-order 만 바꾸는 SetWindowPos 를 써서 창 재생성을 피한다.
+        HWND_TOPMOST   = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOSIZE     = 0x0001
+        SWP_NOMOVE     = 0x0002
+        SWP_NOACTIVATE = 0x0010
+        ctypes.windll.user32.SetWindowPos(
+            int(self.w.winId()),
+            HWND_TOPMOST if checked else HWND_NOTOPMOST,
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
 
     # ── 실시간 갱신 ──────────────────────────────────────────
 
-    def _refresh_stats(self):
+    def _refresh_stats(self) -> None:
         if not self.isVisible():
             return
         w = self.w
@@ -435,23 +448,23 @@ class ControlPanel(QWidget):
 
     # ── 드래그 이동 ──────────────────────────────────────────
 
-    def mousePressEvent(self, e):
+    def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
             self._drag   = True
             self._anchor = e.globalPosition().toPoint() - self.pos()
 
-    def mouseMoveEvent(self, e):
+    def mouseMoveEvent(self, e) -> None:
         if self._drag and self._anchor:
             self.move(e.globalPosition().toPoint() - self._anchor)
 
-    def mouseReleaseEvent(self, e):
+    def mouseReleaseEvent(self, e) -> None:
         self._drag = False
 
-    def closeEvent(self, e):
+    def closeEvent(self, e) -> None:
         self._timer.stop()
         super().closeEvent(e)
 
-    def paintEvent(self, e):
+    def paintEvent(self, e) -> None:
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(26, 26, 26))
         p.setPen(QColor(58, 58, 58))
